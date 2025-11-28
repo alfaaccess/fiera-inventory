@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: fiera-inventory
+    env: python
+    region: oregon
+    buildCommand: ""
+    startCommand: gunicorn app:app
