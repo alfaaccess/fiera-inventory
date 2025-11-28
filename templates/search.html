@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>IT Inventory Search</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    >
+
+    <style>
+        body {
+            background:#fff;
+        }
+
+        /* Центрируем блок поиска */
+        .search-wrapper {
+            min-height: 35vh;
+            display:flex;
+            justify-content:center;
+            align-items:center;
+            text-align:center;
+        }
+
+        /* Таблица компактная и переносит строки */
+        .results-table {
+            width: 100%;
+            font-size: 0.78rem;
+            table-layout: fixed;
+            border-collapse: collapse;
+        }
+
+        .results-table th,
+        .results-table td {
+            padding: 4px 6px;
+            white-space: normal;
+            word-break: break-word;
+            vertical-align: middle;
+        }
+
+        /* Телефонная колонка — фиксированная ширина */
+        .phone-col {
+            min-width: 170px;
+            max-width: 200px;
+            white-space: normal;
+        }
+
+        /* Контейнер делаем широким */
+        .full-container {
+            width: 98%;
+            max-width: 1800px;
+            margin: auto;
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-light bg-light mb-4 shadow-sm">
+    <div class="container-fluid">
+        <span class="navbar-brand mb-0 h1">IT Inventory Search</span>
+    </div>
+</nav>
+
+<div class="full-container">
+
+    <!-- Поиск по центру -->
+    <div class="search-wrapper">
+        <form method="post" style="width:100%; max-width:750px;">
+            <div class="mb-3">
+                <h2 class="fw-normal">Search</h2>
+                <p class="text-muted mb-0">
+                    Search by PC name, IP, operator, 3dEYE login, room, email, phone, location, etc.
+                </p>
+            </div>
+
+            <div class="input-group input-group-lg shadow-sm rounded-pill overflow-hidden">
+                <span class="input-group-text bg-white border-0">🔍</span>
+                <input type="text"
+                       class="form-control border-0"
+                       name="q"
+                       placeholder="Search..."
+                       value="{{ query }}"
+                       autofocus>
+                <button class="btn btn-primary px-4" type="submit">Search</button>
+            </div>
+        </form>
+    </div>
+
+    {% if query %}
+        <p class="mt-3 ms-4">
+            Results for: <strong>{{ query }}</strong>
+            — found <strong>{{ results|length }}</strong> record{{ '' if results|length == 1 else 's' }}
+        </p>
+    {% endif %}
+
+    {% if results %}
+        <div class="mt-3 mb-5">
+            <table class="table table-striped table-hover table-sm align-middle results-table">
+                <thead class="table-light">
+                    <tr>
+                        {% for col in columns %}
+                            {% if col not in ["LAN Tempera Controller Password", "Windows 10 Maps #"] %}
+                                <th class="{% if col == 'Phone' %}phone-col{% endif %}">
+                                    {{ col }}
+                                </th>
+                            {% endif %}
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in results %}
+                        <tr>
+                            {% for col in columns %}
+                                {% if col not in ["LAN Tempera Controller Password", "Windows 10 Maps #"] %}
+                                    <td class="{% if col == 'Phone' %}phone-col{% endif %}">
+                                        {{ row.get(col, "") }}
+                                    </td>
+                                {% endif %}
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% elif query %}
+        <div class="alert alert-warning mt-3">No results found.</div>
+    {% endif %}
+
+</div>
+
+</body>
+</html>
