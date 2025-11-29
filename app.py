@@ -33,6 +33,7 @@ RENAME_COLUMNS = {
     "UVNC - Connect IP address": "IP address",
     "LAN Tempera Controller Password": "3DEYE ACCOUNTS Password",
     "Logmein - Connect Operator": "Logmein Connect Operator",
+    "Room Number": "Office number",
 }
 
 
@@ -205,3 +206,4 @@ def index():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
