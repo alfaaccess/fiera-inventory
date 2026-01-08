@@ -1,9 +1,15 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, redirect, url_for, session
 import csv
 import requests
 from io import StringIO
 
 app = Flask(__name__)
+
+# Секретный ключ для сессий (можешь поменять на любой другой рандомный)
+app.secret_key = "change_this_to_any_random_string"
+
+# Пароль для входа
+PASSWORD = "Alfa7612155"
 
 GOOGLE_CSV_URL = (
     "https://docs.google.com/spreadsheets/d/"
@@ -112,7 +118,7 @@ def load_inventory_from_google():
             if " " in full:
                 first_space = full.find(" ")
                 comp_name = full[:first_space]
-                spec = full[first_space + 1 :]
+                spec = full[first_space + 1:]
             else:
                 comp_name = full
                 spec = ""
@@ -145,39 +151,58 @@ def load_inventory_from_google():
         if renamed not in new_columns:
             new_columns.append(renamed)
 
-    # при желании можно двигать колонки:
-    # new_columns = move_column(new_columns, "Specification", after="Comp Name")
-
     print(f"Loaded {len(cleaned_rows)} rows")
     print("Columns:", new_columns)
 
     return cleaned_rows, new_columns
 
 
+# ------------------ ЛОГИН ТОЛЬКО ПО ПАРОЛЮ ------------------
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == PASSWORD:
+            session["logged_in"] = True
+            return redirect(url_for("index"))
+        else:
+            error = "Incorrect password"
+
+    return render_template("login.html", error=error)
+
+
+# ------------------ ОСНОВНАЯ СТРАНИЦА ПОИСКА ------------------
+
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # ВАЖНО: query берём только при POST, чтобы при заходе (GET) ничего не показывать
+    # если не залогинен – отправляем на ввод пароля
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
+    # ✅ query берём только при POST; при GET будет пусто и ничего не покажется
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
 
     results = []
     columns = []
 
-    # GET -> ничего не показываем (как ты хотел)
+    # ✅ GET: ничего не показываем (как ты хотела)
     if request.method == "GET":
         return render_template("search.html", query=query, results=results, columns=columns)
 
-    # POST -> нажали Search
+    # ✅ POST: нажали Search -> грузим данные
     data, columns = load_inventory_from_google()
 
     if query:
-        # твоя логика фильтра — НЕ меняю
+        # твоя старая логика фильтра (не меняю)
         q = query.lower()
         for row in data:
             values = [str(v).lower() for v in row.values() if v is not None]
             if any(q in v for v in values):
                 results.append(row)
     else:
-        # НОВОЕ: пустой search -> показать весь список
+        # ✅ НОВОЕ: Search с пустым полем -> показываем весь список
         results = data
 
     return render_template("search.html", query=query, results=results, columns=columns)
