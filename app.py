@@ -13,15 +13,11 @@ GOOGLE_CSV_URL = (
 
 # --- НАСТРОЙКИ КОЛОНОК ----------------------------------------
 
-# Какие колонки полностью убрать (из вывода и из данных)
 REMOVE_COLUMNS = [
-    "Windows 11 №",          # уже удаляем
-    # "LAN Tempera Controller Password",  # ← можешь добавить сюда ещё
+    "Windows 11 №",
 ]
 
-# Переименование колонок: "старое имя" -> "новое имя"
 RENAME_COLUMNS = {
-    # Windows 7 Comp Name → временное объединённое поле
     "Windows 7 Comp Name": "Comp Name/Specification",
     "Maps Access 3DEYE ACCOUNTS Username": "3DEYE ACCOUNTS Username",
     "UVNC - Connect IP address": "IP address",
@@ -30,37 +26,7 @@ RENAME_COLUMNS = {
 }
 
 
-def move_column(columns, col_name, *, before=None, after=None):
-    """
-    Вспомогательная функция: переместить колонку col_name
-    перед before или после after.
-    Если before/after не найдены, порядок не меняется.
-    """
-    if col_name not in columns:
-        return columns
-
-    cols = columns.copy()
-    cols.remove(col_name)
-
-    if before and before in cols:
-        idx = cols.index(before)
-        cols.insert(idx, col_name)
-    elif after and after in cols:
-        idx = cols.index(after) + 1
-        cols.insert(idx, col_name)
-    else:
-        # если не нашли куда вставить – вернём в конец
-        cols.append(col_name)
-
-    return cols
-
-
 def load_inventory_from_google():
-    """
-    Load the Google Sheet (CSV) into a list of dicts
-    and return (rows, columns).
-    Column names are cleaned with strip(), порядок сохраняем.
-    """
     try:
         resp = requests.get(GOOGLE_CSV_URL, timeout=10)
         resp.raise_for_status()
@@ -71,114 +37,96 @@ def load_inventory_from_google():
     reader = csv.DictReader(StringIO(resp.text))
     raw_rows = list(reader)
 
-    # 1. Берём исходные заголовки (в порядке, как в Google Sheets)
     original_headers = reader.fieldnames or []
-
-    columns = []
     header_map = {}
+    columns = []
 
     for h in original_headers:
-        if h is None:
-            continue
         clean = h.strip()
         header_map[h] = clean
         if clean not in columns:
             columns.append(clean)
 
-    # 2. Чистим строки, при этом удаляем и переименовываем колонки
     cleaned_rows = []
     for raw in raw_rows:
-        clean_row = {}
-        for orig_key, v in raw.items():
+        row = {}
+        for orig_key, value in raw.items():
             if orig_key is None:
                 continue
 
-            key = header_map[orig_key]  # очищенное имя заголовка
-
+            key = header_map[orig_key]
             if key in REMOVE_COLUMNS:
-                # пропускаем ненужную колонку
                 continue
 
-            # переименование, если есть в словаре RENAME_COLUMNS
             new_key = RENAME_COLUMNS.get(key, key)
+            row[new_key] = value.strip() if isinstance(value, str) else value
 
-            val = v.strip() if isinstance(v, str) else v
-            clean_row[new_key] = val
-
-        # --------- разделяем Comp Name/Specification на две колонки ---------
-        full = clean_row.get("Comp Name/Specification")
+        # --- Split Comp Name / Specification ---
+        full = row.get("Comp Name/Specification")
         if full:
-            full = full.strip()
             if " " in full:
-                first_space = full.find(" ")
-                comp_name = full[:first_space]
-                spec = full[first_space + 1 :]
+                i = full.find(" ")
+                row["Comp Name"] = full[:i]
+                row["Specification"] = full[i + 1 :]
             else:
-                comp_name = full
-                spec = ""
+                row["Comp Name"] = full
+                row["Specification"] = ""
+            row.pop("Comp Name/Specification", None)
 
-            clean_row["Comp Name"] = comp_name
-            clean_row["Specification"] = spec
+        cleaned_rows.append(row)
 
-            # старое объединённое поле больше не нужно
-            clean_row.pop("Comp Name/Specification", None)
-        # --------------------------------------------------------------------
-
-        cleaned_rows.append(clean_row)
-
-    # 3. Обновляем список колонок (без удалённых, с учётом переименования)
     new_columns = []
     for col in columns:
         if col in REMOVE_COLUMNS:
             continue
 
-        # применяем переименование
         renamed = RENAME_COLUMNS.get(col, col)
-
-        # вместо "Comp Name/Specification" добавляем две новые колонки
         if renamed == "Comp Name/Specification":
-            for c in ("Comp Name", "Specification"):
-                if c not in new_columns:
-                    new_columns.append(c)
-            continue
-
-        if renamed not in new_columns:
+            new_columns.extend(["Comp Name", "Specification"])
+        elif renamed not in new_columns:
             new_columns.append(renamed)
-
-    # при желании можно двигать колонки:
-    # new_columns = move_column(new_columns, "Specification", after="Comp Name")
-
-    print(f"Loaded {len(cleaned_rows)} rows")
-    print("Columns:", new_columns)
 
     return cleaned_rows, new_columns
 
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    query = request.form.get("q", "").strip()
-
-    # всегда загружаем данные
-    data, columns = load_inventory_from_google()
+    query = ""
     results = []
+    columns = []
 
-    if query:
+    # 🔹 GET — ничего не показываем
+    if request.method == "GET":
+        return render_template(
+            "search.html",
+            query=query,
+            results=results,
+            columns=columns,
+            searched=False
+        )
+
+    # 🔹 POST — нажали Search
+    query = request.form.get("q", "").strip()
+    data, columns = load_inventory_from_google()
+
+    # пустой поиск → показать всё
+    if not query:
+        results = data
+    else:
         q = query.lower()
         for row in data:
-            # full-text search across ALL values in the row
-            values = [str(v).lower() for v in row.values() if v is not None]
+            values = [str(v).lower() for v in row.values() if v]
             if any(q in v for v in values):
                 results.append(row)
-    else:
-        # если поиск пустой — показываем всё
-        results = data
 
     return render_template(
         "search.html",
         query=query,
         results=results,
-        columns=columns
+        columns=columns,
+        searched=True
     )
+
 
 if __name__ == "__main__":
     app.run(debug=True)
