@@ -187,22 +187,34 @@ def index():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
-    query = request.form.get("q", "").strip()
     results = []
     columns = []
 
-    if query:
-        q = query.lower()
-        data, columns = load_inventory_from_google()
+    # ✅ при входе (GET) ничего не показываем
+    if request.method == "GET":
+        return render_template("search.html", query="", results=results, columns=columns)
 
-        for row in data:
-            # full-text search across ALL values in the row
-            values = [str(v).lower() for v in row.values() if v is not None]
-            if any(q in v for v in values):
-                results.append(row)
+    # ✅ нажали Search (POST)
+    query = request.form.get("q", "").strip()
+
+    # ✅ если поле пустое — показать весь список
+    if not query:
+        data, columns = load_inventory_from_google()
+        results = data
+        return render_template("search.html", query=query, results=results, columns=columns)
+
+    # ✅ иначе — твоя старая логика фильтра (не меняю)
+    q = query.lower()
+    data, columns = load_inventory_from_google()
+
+    for row in data:
+        values = [str(v).lower() for v in row.values() if v is not None]
+        if any(q in v for v in values):
+            results.append(row)
 
     return render_template("search.html", query=query, results=results, columns=columns)
 
 
 if __name__ == "__main__":
     app.run(debug=True)
+
