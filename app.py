@@ -33,7 +33,6 @@ RENAME_COLUMNS = {
     "UVNC - Connect IP address": "IP address",
     "LAN Tempera Controller Password": "3DEYE ACCOUNTS Password",
     "Logmein - Connect Operator": "Logmein Connect Operator",
-    "Room Number": "Office number",
 }
 
 
@@ -152,9 +151,6 @@ def load_inventory_from_google():
         if renamed not in new_columns:
             new_columns.append(renamed)
 
-    # при желании можно двигать колонки:
-    # new_columns = move_column(new_columns, "Specification", after="Comp Name")
-
     print(f"Loaded {len(cleaned_rows)} rows")
     print("Columns:", new_columns)
 
@@ -162,7 +158,6 @@ def load_inventory_from_google():
 
 
 # ------------------ ЛОГИН ТОЛЬКО ПО ПАРОЛЮ ------------------
-
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -180,41 +175,38 @@ def login():
 
 # ------------------ ОСНОВНАЯ СТРАНИЦА ПОИСКА ------------------
 
-
 @app.route("/", methods=["GET", "POST"])
 def index():
     # если не залогинен – отправляем на ввод пароля
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
+    # ✅ query берём только при POST; при GET будет пусто и ничего не покажется
+    query = request.form.get("q", "").strip() if request.method == "POST" else ""
+
     results = []
     columns = []
 
-    # ✅ при входе (GET) ничего не показываем
+    # ✅ GET: ничего не показываем (как ты хотела)
     if request.method == "GET":
-        return render_template("search.html", query="", results=results, columns=columns)
-
-    # ✅ нажали Search (POST)
-    query = request.form.get("q", "").strip()
-
-    # ✅ если поле пустое — показать весь список
-    if not query:
-        data, columns = load_inventory_from_google()
-        results = data
         return render_template("search.html", query=query, results=results, columns=columns)
 
-    # ✅ иначе — твоя старая логика фильтра (не меняю)
-    q = query.lower()
+    # ✅ POST: нажали Search -> грузим данные
     data, columns = load_inventory_from_google()
 
-    for row in data:
-        values = [str(v).lower() for v in row.values() if v is not None]
-        if any(q in v for v in values):
-            results.append(row)
+    if query:
+        # твоя старая логика фильтра (не меняю)
+        q = query.lower()
+        for row in data:
+            values = [str(v).lower() for v in row.values() if v is not None]
+            if any(q in v for v in values):
+                results.append(row)
+    else:
+        # ✅ НОВОЕ: Search с пустым полем -> показываем весь список
+        results = data
 
     return render_template("search.html", query=query, results=results, columns=columns)
 
 
 if __name__ == "__main__":
     app.run(debug=True)
-
