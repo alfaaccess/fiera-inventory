@@ -9,7 +9,12 @@ app = Flask(__name__)
 app.secret_key = "change_this_to_any_random_string"
 
 # Пароль для входа
-PASSWORD = "Alfa7612155"
+PASSWORDS = {
+    "admin": "Alfa7612155",
+    "user1": "alfa",
+    
+}
+
 
 GOOGLE_CSV_URL = (
     "https://docs.google.com/spreadsheets/d/"
@@ -210,3 +215,4 @@ def index():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
