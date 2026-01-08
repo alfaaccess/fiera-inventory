@@ -9,11 +9,7 @@ app = Flask(__name__)
 app.secret_key = "change_this_to_any_random_string"
 
 # Пароль для входа
-PASSWORDS = {
-    "admin": "Alfa7612155",
-    "user1": "alfa",
-    
-}
+PASSWORD = "Alfa7612155"
 
 
 GOOGLE_CSV_URL = (
