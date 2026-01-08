@@ -1,15 +1,9 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request
 import csv
 import requests
 from io import StringIO
 
 app = Flask(__name__)
-
-# Секретный ключ для сессий (можешь поменять на любой другой рандомный)
-app.secret_key = "change_this_to_any_random_string"
-
-# Пароль для входа
-PASSWORD = "Alfa7612155"
 
 GOOGLE_CSV_URL = (
     "https://docs.google.com/spreadsheets/d/"
@@ -33,7 +27,6 @@ RENAME_COLUMNS = {
     "UVNC - Connect IP address": "IP address",
     "LAN Tempera Controller Password": "3DEYE ACCOUNTS Password",
     "Logmein - Connect Operator": "Logmein Connect Operator",
-    "Room Number": "Office number",
 }
 
 
@@ -119,7 +112,7 @@ def load_inventory_from_google():
             if " " in full:
                 first_space = full.find(" ")
                 comp_name = full[:first_space]
-                spec = full[first_space + 1:]
+                spec = full[first_space + 1 :]
             else:
                 comp_name = full
                 spec = ""
@@ -161,49 +154,31 @@ def load_inventory_from_google():
     return cleaned_rows, new_columns
 
 
-# ------------------ ЛОГИН ТОЛЬКО ПО ПАРОЛЮ ------------------
-
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    error = None
-    if request.method == "POST":
-        password = request.form.get("password", "")
-        if password == PASSWORD:
-            session["logged_in"] = True
-            return redirect(url_for("index"))
-        else:
-            error = "Incorrect password"
-
-    return render_template("login.html", error=error)
-
-
-# ------------------ ОСНОВНАЯ СТРАНИЦА ПОИСКА ------------------
-
-
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # если не залогинен – отправляем на ввод пароля
-    if not session.get("logged_in"):
-        return redirect(url_for("login"))
-
     query = request.form.get("q", "").strip()
+
+    # всегда загружаем данные
+    data, columns = load_inventory_from_google()
     results = []
-    columns = []
 
     if query:
         q = query.lower()
-        data, columns = load_inventory_from_google()
-
         for row in data:
             # full-text search across ALL values in the row
             values = [str(v).lower() for v in row.values() if v is not None]
             if any(q in v for v in values):
                 results.append(row)
+    else:
+        # если поиск пустой — показываем всё
+        results = data
 
-    return render_template("search.html", query=query, results=results, columns=columns)
-
+    return render_template(
+        "search.html",
+        query=query,
+        results=results,
+        columns=columns
+    )
 
 if __name__ == "__main__":
     app.run(debug=True)
-
