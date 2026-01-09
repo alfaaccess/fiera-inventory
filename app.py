@@ -8,10 +8,9 @@ app = Flask(__name__)
 # Секретный ключ для сессий (можешь поменять на любой другой рандомный)
 app.secret_key = "change_this_to_any_random_string"
 
-# Пароли (логин только по паролю)
+# Один пароль (только admin)
 PASSWORDS = {
-    "admin": "Alfa7612155",
-    "user1": "alfa",
+    "admin": "Alfa7462111",
 }
 
 GOOGLE_CSV_URL = (
@@ -34,19 +33,13 @@ RENAME_COLUMNS = {
     "Logmein - Connect Operator": "Logmein Connect Operator",
 }
 
-# Какие колонки показывать обычному user'у
-USER1_VISIBLE_COLUMNS = [
-    "Comp Name",
-    "Specification",
-    "Logmein Connect Operator",     # <- внимательно: должно совпасть с названием колонки в данных
-    "Room Number",
-    "Location",
-    "Roles (## of cameras)",
-    "Windows Version",
-]
-
 
 def move_column(columns, col_name, *, before=None, after=None):
+    """
+    Вспомогательная функция: переместить колонку col_name
+    перед before или после after.
+    Если before/after не найдены, порядок не меняется.
+    """
     if col_name not in columns:
         return columns
 
@@ -66,6 +59,11 @@ def move_column(columns, col_name, *, before=None, after=None):
 
 
 def load_inventory_from_google():
+    """
+    Load the Google Sheet (CSV) into a list of dicts
+    and return (rows, columns).
+    Column names are cleaned with strip(), порядок сохраняем.
+    """
     try:
         resp = requests.get(GOOGLE_CSV_URL, timeout=10)
         resp.raise_for_status()
@@ -76,6 +74,7 @@ def load_inventory_from_google():
     reader = csv.DictReader(StringIO(resp.text))
     raw_rows = list(reader)
 
+    # 1. Берём исходные заголовки (в порядке, как в Google Sheets)
     original_headers = reader.fieldnames or []
 
     columns = []
@@ -89,6 +88,7 @@ def load_inventory_from_google():
         if clean not in columns:
             columns.append(clean)
 
+    # 2. Чистим строки, при этом удаляем и переименовываем колонки
     cleaned_rows = []
     for raw in raw_rows:
         clean_row = {}
@@ -96,7 +96,7 @@ def load_inventory_from_google():
             if orig_key is None:
                 continue
 
-            key = header_map[orig_key]
+            key = header_map[orig_key]  # очищенное имя заголовка
 
             if key in REMOVE_COLUMNS:
                 continue
@@ -124,7 +124,7 @@ def load_inventory_from_google():
 
         cleaned_rows.append(clean_row)
 
-    # Обновляем список колонок (без удалённых, с учётом переименования)
+    # 3. Обновляем список колонок (без удалённых, с учётом переименования)
     new_columns = []
     for col in columns:
         if col in REMOVE_COLUMNS:
@@ -147,22 +147,6 @@ def load_inventory_from_google():
     return cleaned_rows, new_columns
 
 
-def apply_role_column_filter(rows, columns, role):
-    """Ограничиваем видимые колонки для user1 (и данные тоже)."""
-    if role != "user1":
-        return rows, columns
-
-    allowed = [c for c in USER1_VISIBLE_COLUMNS if c in columns]
-    # если какая-то колонка отсутствует в листе — просто пропустим её
-
-    filtered_rows = []
-    for r in rows:
-        fr = {c: (r.get(c, "") if r.get(c) is not None else "") for c in allowed}
-        filtered_rows.append(fr)
-
-    return filtered_rows, allowed
-
-
 # ------------------ ЛОГИН ТОЛЬКО ПО ПАРОЛЮ ------------------
 
 @app.route("/login", methods=["GET", "POST"])
@@ -171,11 +155,11 @@ def login():
     if request.method == "POST":
         password = (request.form.get("password") or "").strip()
 
-        # ищем, чей это пароль
+        # ищем пароль (сейчас только admin)
         for username, pwd in PASSWORDS.items():
             if password == pwd:
                 session["logged_in"] = True
-                session["user"] = username   # admin / user1
+                session["user"] = username
                 return redirect(url_for("index"))
 
         error = "Incorrect password"
@@ -196,9 +180,9 @@ def index():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
-    role = session.get("user", "user1")  # по умолчанию user1, если вдруг нет
-
+    # query берём только при POST; при GET будет пусто и ничего не покажется
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
+
     results = []
     columns = []
 
@@ -209,10 +193,8 @@ def index():
     # POST: нажали Search -> грузим данные
     data, columns = load_inventory_from_google()
 
-    # применяем ограничение колонок по роли
-    data, columns = apply_role_column_filter(data, columns, role)
-
     if query:
+        # фильтр поиска (как раньше)
         q = query.lower()
         for row in data:
             values = [str(v).lower() for v in row.values() if v is not None]
