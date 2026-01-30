@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, flash
 import os
 import secrets
 import json
@@ -7,24 +7,18 @@ from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
-# ✅ Секретный ключ для сессий:
-# Render: Environment Variable -> FLASK_SECRET_KEY = (любой длинный random)
-# Local: если переменной нет — создаст временный ключ (при рестарте сменится)
+# ✅ secret для сессий
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
-# ✅ Один пароль (только admin)
-PASSWORDS = {
-    "admin": "Alfa7612155",
-}
+# ✅ пароль
+PASSWORDS = {"admin": "Alfa7612155"}
 
 # ✅ Google Sheet
 SHEET_ID = "1fKdQMb_M6hwQKOjosAfLxfaXdLE56E_3zxPtN1A9S7I"
 WORKSHEET_GID = 135237540
 
 # --- НАСТРОЙКИ КОЛОНОК ----------------------------------------
-REMOVE_COLUMNS = [
-    "Windows 11 №",
-]
+REMOVE_COLUMNS = ["Windows 11 №"]
 
 RENAME_COLUMNS = {
     "Windows 7 Comp Name": "Comp Name/Specification",
@@ -34,57 +28,67 @@ RENAME_COLUMNS = {
     "Logmein - Connect Operator": "Logmein Connect Operator",
 }
 
+# ---- какую колонку считаем "ID" строки (по ней ищем строку в sheet)
+# На твоём листе это "Windows 11 №"
+ROW_ID_HEADER = "Windows 11 №"
 
-def load_inventory_from_google():
+
+# -------------------- Google client --------------------
+def get_gspread_client():
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not sa_json:
+        raise RuntimeError("Missing env var GOOGLE_SERVICE_ACCOUNT_JSON")
+
+    sa_info = json.loads(sa_json)
+
+    # ✅ ВАЖНО: НЕ readonly, а запись
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+    return gspread.authorize(creds)
+
+
+def get_worksheet():
+    client = get_gspread_client()
+    sheet = client.open_by_key(SHEET_ID)
+    ws = sheet.get_worksheet_by_id(WORKSHEET_GID)
+    return ws
+
+
+def is_data_row_start(first_cell: str) -> bool:
+    return (first_cell or "").strip().isdigit()
+
+
+def parse_sheet_values(values):
     """
-    Читает данные из Google Sheets через Service Account.
+    values = worksheet.get_all_values()
 
-    ВАЖНО: у тебя заголовки в 2-3 строки (группы + подзаголовки),
-    поэтому мы:
-    1) находим строку, где начинаются данные (первая колонка = число)
-    2) берём все строки выше как "header rows"
-    3) склеиваем заголовки по колонкам: "Windows 7" + "Comp Name" -> "Windows 7 Comp Name"
-    4) дальше применяем REMOVE / RENAME и split Comp Name/Specification.
+    Возвращает:
+    - cleaned_rows: список словарей (как ты отображаешь)
+    - display_columns: список колонок для таблицы (как ты отображаешь)
+    - sheet_headers: комбинированные заголовки (в терминах sheet)
+    - row_map: соответствие row_id -> sheet_row_index (1-based)
     """
-    try:
-        sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-        if not sa_json:
-            raise RuntimeError("Missing env var GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not values or len(values) < 2:
+        return [], [], [], {}
 
-        sa_info = json.loads(sa_json)
-
-        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
-        client = gspread.authorize(creds)
-
-        sheet = client.open_by_key(SHEET_ID)
-        worksheet = sheet.get_worksheet_by_id(WORKSHEET_GID)
-
-        values = worksheet.get_all_values()
-        if not values or len(values) < 2:
-            return [], []
-
-    except Exception as e:
-        print("❌ Google Sheets error:", e)
-        return [], []
-
-    # --------- 1) Находим, где начинаются данные (там где первая ячейка = число) ----------
+    # 1) ищем где начинаются данные
     data_start = None
     for i, row in enumerate(values):
         first = (row[0] if row else "").strip()
-        if first.isdigit():
+        if is_data_row_start(first):
             data_start = i
             break
 
-    # если не нашли — считаем, что первая строка заголовок, дальше данные
     if data_start is None:
         header_rows = [values[0]]
         raw_rows = values[1:]
+        raw_row_indices = list(range(2, 2 + len(raw_rows)))  # 1-based индексы строк в sheet
     else:
-        header_rows = values[:data_start]   # 2-3 строки заголовков
-        raw_rows = values[data_start:]      # данные
+        header_rows = values[:data_start]
+        raw_rows = values[data_start:]
+        raw_row_indices = list(range(data_start + 1, data_start + 1 + len(raw_rows)))  # 1-based
 
-    # --------- 2) Склеиваем заголовки из нескольких строк ----------
+    # 2) комбинируем заголовки
     max_cols = max((len(r) for r in header_rows), default=0)
 
     combined_headers = []
@@ -94,102 +98,98 @@ def load_inventory_from_google():
             cell = hr[col_idx].strip() if col_idx < len(hr) and hr[col_idx] else ""
             if cell:
                 parts.append(cell)
-        combined = " ".join(parts).strip()
-        combined_headers.append(combined)
+        combined_headers.append(" ".join(parts).strip())
 
-    # --------- 3) Делаем columns/header_map как в твоём “верхнем” коде ----------
+    # 3) columns как раньше (strip, порядок, без дублей)
     columns = []
-    header_map = {}
     for h in combined_headers:
-        if h is None:
-            continue
-        clean = h.strip()
-        header_map[h] = clean
+        clean = (h or "").strip()
         if clean and clean not in columns:
             columns.append(clean)
 
-    # --------- 4) Собираем строки данных ----------
+    # 4) собираем строки + row_map
     cleaned_rows = []
-    for row in raw_rows:
+    row_map = {}  # row_id(str) -> sheet_row_index(1-based)
+
+    for row, sheet_row_idx in zip(raw_rows, raw_row_indices):
         clean_row = {}
 
-        # превращаем ряд в dict по нашим комбинированным headers
+        # dict по combined_headers
         for idx, header in enumerate(combined_headers):
             if not header:
                 continue
-
             key = header.strip()
             if key in REMOVE_COLUMNS:
                 continue
-
             new_key = RENAME_COLUMNS.get(key, key)
+
             value = row[idx] if idx < len(row) else ""
             val = value.strip() if isinstance(value, str) else value
 
-            # как DictReader при дублях: не перезаписываем
             if new_key not in clean_row:
                 clean_row[new_key] = val
 
-        # --------- разделяем Comp Name/Specification на две колонки ---------
+        # split Comp Name/Specification
         full = clean_row.get("Comp Name/Specification")
         if full:
             full = full.strip()
             if " " in full:
-                first_space = full.find(" ")
-                comp_name = full[:first_space]
-                spec = full[first_space + 1:]
+                p = full.find(" ")
+                clean_row["Comp Name"] = full[:p]
+                clean_row["Specification"] = full[p + 1:]
             else:
-                comp_name = full
-                spec = ""
-
-            clean_row["Comp Name"] = comp_name
-            clean_row["Specification"] = spec
+                clean_row["Comp Name"] = full
+                clean_row["Specification"] = ""
             clean_row.pop("Comp Name/Specification", None)
-        # --------------------------------------------------------------------
 
-        # пропускаем совсем пустые строки (если бывают)
-        if any(v for v in clean_row.values()):
+        # row_id для ссылок Edit
+        # берём из оригинального sheet заголовка ROW_ID_HEADER,
+        # но у нас он мог быть удалён из отображения (REMOVE_COLUMNS),
+        # поэтому берем напрямую из row[0] (это и есть "№" у тебя)
+        row_id = (row[0] if row else "").strip()
+        if row_id:
+            row_map[row_id] = sheet_row_idx
+            clean_row["_row_id"] = row_id  # служебное поле для кнопки Edit
+
+        # пропускаем пустые строки
+        if any(v for k, v in clean_row.items() if k != "_row_id"):
             cleaned_rows.append(clean_row)
 
-    # --------- 5) Финальные колонки (как в верхнем коде) ----------
-    new_columns = []
+    # 5) display_columns как раньше
+    display_columns = []
     for col in columns:
         if col in REMOVE_COLUMNS:
             continue
-
         renamed = RENAME_COLUMNS.get(col, col)
-
         if renamed == "Comp Name/Specification":
             for c in ("Comp Name", "Specification"):
-                if c not in new_columns:
-                    new_columns.append(c)
-            continue
+                if c not in display_columns:
+                    display_columns.append(c)
+        else:
+            if renamed and renamed not in display_columns:
+                display_columns.append(renamed)
 
-        if renamed and renamed not in new_columns:
-            new_columns.append(renamed)
-
-    print(f"✅ Loaded {len(cleaned_rows)} rows")
-    print("✅ Columns:", new_columns)
-
-    return cleaned_rows, new_columns
+    return cleaned_rows, display_columns, combined_headers, row_map
 
 
-# ------------------ ЛОГИН ТОЛЬКО ПО ПАРОЛЮ ------------------
+def load_inventory():
+    ws = get_worksheet()
+    values = ws.get_all_values()
+    return parse_sheet_values(values)
 
+
+# ------------------ auth ------------------
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
         password = (request.form.get("password") or "").strip()
-
         for username, pwd in PASSWORDS.items():
             if password == pwd:
                 session["logged_in"] = True
                 session["user"] = username
                 return redirect(url_for("index"))
-
         error = "Incorrect password"
-
     return render_template("login.html", error=error)
 
 
@@ -199,8 +199,7 @@ def logout():
     return redirect(url_for("login"))
 
 
-# ------------------ ОСНОВНАЯ СТРАНИЦА ПОИСКА ------------------
-
+# ------------------ main search page ------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     if not session.get("logged_in"):
@@ -208,18 +207,16 @@ def index():
 
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
 
-    results = []
-    columns = []
-
     if request.method == "GET":
-        return render_template("search.html", query=query, results=results, columns=columns)
+        return render_template("search.html", query="", results=[], columns=[])
 
-    data, columns = load_inventory_from_google()
+    data, columns, _combined_headers, _row_map = load_inventory()
 
     if query:
         q = query.lower()
+        results = []
         for row in data:
-            values = [str(v).lower() for v in row.values() if v is not None]
+            values = [str(v).lower() for k, v in row.items() if v is not None and k != "_row_id"]
             if any(q in v for v in values):
                 results.append(row)
     else:
@@ -228,5 +225,121 @@ def index():
     return render_template("search.html", query=query, results=results, columns=columns)
 
 
+# ------------------ edit ------------------
+@app.route("/edit/<row_id>", methods=["GET", "POST"])
+def edit(row_id):
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
+    ws = get_worksheet()
+    values = ws.get_all_values()
+    rows, display_columns, combined_headers, row_map = parse_sheet_values(values)
+
+    if row_id not in row_map:
+        flash("Row not found", "error")
+        return redirect(url_for("index"))
+
+    sheet_row_index = row_map[row_id]
+
+    # берём текущую строку в sheet (полностью, со всеми колонками)
+    current_row = ws.row_values(sheet_row_index)
+
+    if request.method == "GET":
+        # Сделаем форму редактирования по "display_columns"
+        # Но записывать будем в реальные колонки sheet.
+        # Поэтому создадим map: display_col -> sheet_header
+        # Для некоторых колонок display_col сформирован из rename/split — обработаем отдельно.
+        display_data = {}
+
+        # Собираем исходный dict по sheet заголовкам (combined_headers)
+        sheet_dict = {}
+        for idx, h in enumerate(combined_headers):
+            if not h:
+                continue
+            sheet_dict[h] = current_row[idx] if idx < len(current_row) else ""
+
+        # Применяем такой же rename, как при отображении, чтобы заполнить форму
+        temp = {}
+        for h, v in sheet_dict.items():
+            if h in REMOVE_COLUMNS:
+                continue
+            new_key = RENAME_COLUMNS.get(h, h)
+            if new_key not in temp:
+                temp[new_key] = v
+
+        # split Comp Name/Specification для формы
+        full = temp.get("Comp Name/Specification", "") or ""
+        full = full.strip()
+        if full:
+            if " " in full:
+                p = full.find(" ")
+                temp["Comp Name"] = full[:p]
+                temp["Specification"] = full[p + 1:]
+            else:
+                temp["Comp Name"] = full
+                temp["Specification"] = ""
+        if "Comp Name/Specification" in temp:
+            temp.pop("Comp Name/Specification", None)
+
+        for c in display_columns:
+            display_data[c] = temp.get(c, "")
+
+        return render_template("edit.html", row_id=row_id, columns=display_columns, data=display_data)
+
+    # POST: сохраняем изменения
+    form = request.form
+
+    # Нам нужно обновить значения в sheet по настоящим колонкам.
+    # Обновим только те поля, которые есть в display_columns (в форме),
+    # а потом соберём обратно Comp Name/Specification из Comp Name + Specification.
+
+    # 1) собираем значения формы
+    new_display = {c: (form.get(c) or "").strip() for c in display_columns}
+
+    # 2) собираем Comp Name/Specification обратно
+    if "Comp Name" in new_display or "Specification" in new_display:
+        comp = (new_display.get("Comp Name") or "").strip()
+        spec = (new_display.get("Specification") or "").strip()
+        combined = (comp + (" " + spec if spec else "")).strip()
+    else:
+        combined = None
+
+    # 3) Собираем карту: sheet_header -> new_value
+    # Пройдёмся по combined_headers и посмотрим, во что они переименуются.
+    updates = {}  # sheet_col_index(1-based) -> new_value
+
+    for idx, sheet_header in enumerate(combined_headers):
+        if not sheet_header:
+            continue
+        if sheet_header in REMOVE_COLUMNS:
+            continue
+
+        renamed = RENAME_COLUMNS.get(sheet_header, sheet_header)
+
+        # если это Comp Name/Specification — обновляем оригинальный столбец sheet_header
+        if renamed == "Comp Name/Specification":
+            if combined is not None:
+                updates[idx + 1] = combined
+            continue
+
+        # обычные колонки: если они есть в форме — обновим
+        if renamed in new_display:
+            updates[idx + 1] = new_display[renamed]
+
+    try:
+        # пакетное обновление ячеек
+        cells = []
+        for col_idx_1based, val in updates.items():
+            cells.append(gspread.Cell(sheet_row_index, col_idx_1based, val))
+        if cells:
+            ws.update_cells(cells, value_input_option="USER_ENTERED")
+
+        flash("Saved!", "success")
+    except Exception as e:
+        flash(f"Save error: {e}", "error")
+
+    return redirect(url_for("index"))
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
