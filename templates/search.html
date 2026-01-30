@@ -11,9 +11,7 @@
     >
 
     <style>
-        body {
-            background:#fff;
-        }
+        body { background:#fff; }
 
         /* Центрируем блок поиска */
         .search-wrapper {
@@ -53,6 +51,13 @@
             max-width: 1800px;
             margin: auto;
         }
+
+        /* Колонка Edit */
+        .edit-col {
+            width: 90px;
+            text-align: center;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
@@ -60,6 +65,9 @@
 <nav class="navbar navbar-light bg-light mb-4 shadow-sm">
     <div class="container-fluid">
         <span class="navbar-brand mb-0 h1">IT Inventory Search</span>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('logout') }}">Logout</a>
+        </div>
     </div>
 </nav>
 
@@ -107,8 +115,10 @@
                                 </th>
                             {% endif %}
                         {% endfor %}
+                        <th class="edit-col">Edit</th>
                     </tr>
                 </thead>
+
                 <tbody>
                     {% for row in results %}
                         <tr>
@@ -119,9 +129,21 @@
                                     </td>
                                 {% endif %}
                             {% endfor %}
+
+                            <td class="edit-col">
+                                {% if row.get("_row_id") %}
+                                    <a class="btn btn-sm btn-outline-primary"
+                                       href="{{ url_for('edit', row_id=row.get('_row_id')) }}">
+                                        Edit
+                                    </a>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>
+
             </table>
         </div>
     {% elif query %}
