@@ -1,27 +1,25 @@
 from flask import Flask, render_template, request, redirect, url_for, session
-import csv
-import requests
-from io import StringIO
 import os
 import secrets
+import json
+import gspread
+from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
 # ✅ Секретный ключ для сессий:
-# На Render добавь Environment Variable: FLASK_SECRET_KEY = (любой длинный random)
-# Локально: если переменной нет — создаст временный ключ (при рестарте сменится)
+# Render: Environment Variable -> FLASK_SECRET_KEY = (любой длинный random)
+# Local: если переменной нет — создаст временный ключ (при рестарте сменится)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
-# Один пароль (только admin)
+# ✅ Один пароль (только admin)
 PASSWORDS = {
     "admin": "Alfa7462111",
 }
 
-GOOGLE_CSV_URL = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1fKdQMb_M6hwQKOjosAfLxfaXdLE56E_3zxPtN1A9S7I"
-    "/gviz/tq?tqx=out:csv&gid=135237540"
-)
+# ✅ Google Sheet
+SHEET_ID = "1fKdQMb_M6hwQKOjosAfLxfaXdLE56E_3zxPtN1A9S7I"
+WORKSHEET_GID = 135237540
 
 # --- НАСТРОЙКИ КОЛОНОК ----------------------------------------
 REMOVE_COLUMNS = [
@@ -37,71 +35,80 @@ RENAME_COLUMNS = {
 }
 
 
-def move_column(columns, col_name, *, before=None, after=None):
-    """Вспомогательная функция: переместить колонку col_name перед before или после after.
-    Если before/after не найдены, порядок не меняется.
-    """
-    if col_name not in columns:
-        return columns
-
-    cols = columns.copy()
-    cols.remove(col_name)
-
-    if before and before in cols:
-        idx = cols.index(before)
-        cols.insert(idx, col_name)
-    elif after and after in cols:
-        idx = cols.index(after) + 1
-        cols.insert(idx, col_name)
-    else:
-        cols.append(col_name)
-
-    return cols
-
-
 def load_inventory_from_google():
-    """Load the Google Sheet (CSV) into a list of dicts and return (rows, columns).
-    Column names are cleaned with strip(), порядок сохраняем.
+    """
+    Читает данные из Google Sheets через Service Account.
+    JSON сервис-аккаунта хранится в env GOOGLE_SERVICE_ACCOUNT_JSON.
+
+    ВАЖНО: логика заголовков/колонок сделана как в твоём верхнем CSV-коде:
+    - сохраняем порядок колонок как в листе
+    - strip() заголовков
+    - НЕ добавляем _1/_2 к дублям (берём первое вхождение)
+    - REMOVE_COLUMNS / RENAME_COLUMNS работают 1-в-1 как раньше
+    - Comp Name/Specification разделяется так же
     """
     try:
-        resp = requests.get(GOOGLE_CSV_URL, timeout=10)
-        resp.raise_for_status()
+        sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        if not sa_json:
+            raise RuntimeError("Missing env var GOOGLE_SERVICE_ACCOUNT_JSON")
+
+        sa_info = json.loads(sa_json)
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+        client = gspread.authorize(creds)
+
+        sheet = client.open_by_key(SHEET_ID)
+        worksheet = sheet.get_worksheet_by_id(WORKSHEET_GID)
+
+        values = worksheet.get_all_values()
+        if not values or len(values) < 2:
+            return [], []
+
+        raw_headers = values[0]
+        raw_rows = values[1:]
+
     except Exception as e:
-        print("Error loading Google Sheet:", e)
+        print("❌ Google Sheets error:", e)
         return [], []
 
-    reader = csv.DictReader(StringIO(resp.text))
-    raw_rows = list(reader)
-
-    # 1. Берём исходные заголовки (в порядке, как в Google Sheets)
-    original_headers = reader.fieldnames or []
-
+    # 1) Заголовки: strip + порядок + ignore duplicates (как DictReader)
     columns = []
-    header_map = {}
-    for h in original_headers:
+    header_map = {}   # idx -> clean_header
+    seen = set()
+
+    for idx, h in enumerate(raw_headers):
         if h is None:
             continue
         clean = h.strip()
-        header_map[h] = clean
-        if clean not in columns:
+        header_map[idx] = clean
+
+        if clean and clean not in seen:
             columns.append(clean)
+            seen.add(clean)
 
-    # 2. Чистим строки, при этом удаляем и переименовываем колонки
+    # 2) Чистим строки: REMOVE/RENAME
     cleaned_rows = []
-    for raw in raw_rows:
+    for row in raw_rows:
         clean_row = {}
-        for orig_key, v in raw.items():
-            if orig_key is None:
-                continue
 
-            key = header_map[orig_key]  # очищенное имя заголовка
+        # идём по индексам заголовков, чтобы сохранить поведение как "по колонкам"
+        for idx, _ in enumerate(raw_headers):
+            key = header_map.get(idx)
+            if not key:
+                continue
 
             if key in REMOVE_COLUMNS:
                 continue
 
             new_key = RENAME_COLUMNS.get(key, key)
-            val = v.strip() if isinstance(v, str) else v
-            clean_row[new_key] = val
+
+            value = row[idx] if idx < len(row) else ""
+            val = value.strip() if isinstance(value, str) else value
+
+            # как DictReader при дублях: не перезаписываем
+            if new_key not in clean_row:
+                clean_row[new_key] = val
 
         # --------- разделяем Comp Name/Specification на две колонки ---------
         full = clean_row.get("Comp Name/Specification")
@@ -122,7 +129,7 @@ def load_inventory_from_google():
 
         cleaned_rows.append(clean_row)
 
-    # 3. Обновляем список колонок (без удалённых, с учётом переименования)
+    # 3) Колонки: REMOVE + RENAME + split Comp Name/Specification (как в первом)
     new_columns = []
     for col in columns:
         if col in REMOVE_COLUMNS:
@@ -139,20 +146,20 @@ def load_inventory_from_google():
         if renamed not in new_columns:
             new_columns.append(renamed)
 
-    print(f"Loaded {len(cleaned_rows)} rows")
-    print("Columns:", new_columns)
+    print(f"✅ Loaded {len(cleaned_rows)} rows")
+    print("✅ Columns:", new_columns)
 
     return cleaned_rows, new_columns
 
 
 # ------------------ ЛОГИН ТОЛЬКО ПО ПАРОЛЮ ------------------
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
         password = (request.form.get("password") or "").strip()
 
-        # ищем пароль (сейчас только admin)
         for username, pwd in PASSWORDS.items():
             if password == pwd:
                 session["logged_in"] = True
@@ -171,6 +178,7 @@ def logout():
 
 
 # ------------------ ОСНОВНАЯ СТРАНИЦА ПОИСКА ------------------
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     if not session.get("logged_in"):
@@ -203,5 +211,5 @@ def index():
 
 
 if __name__ == "__main__":
-    # На Render лучше host/port так:
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+    # Локально можно debug=True, на Render не нужно
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
