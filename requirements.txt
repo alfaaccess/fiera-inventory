@@ -1,3 +1,8 @@
+Flask>=2.3
+requests>=2.31
+gunicorn>=21.2
+gspread>=6.0
+google-auth>=2.25
 Flask
 requests
 gunicorn
