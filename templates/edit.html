@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Edit {{ row_id }}</title>
+</head>
+<body>
+  <h2>Edit row #{{ row_id }}</h2>
+
+  <form method="post">
+    {% for c in columns %}
+      <div style="margin-bottom:10px;">
+        <label style="display:block; font-weight:600;">{{ c }}</label>
+        <input type="text" name="{{ c }}" value="{{ data.get(c,'') }}" style="width:500px;">
+      </div>
+    {% endfor %}
+
+    <button type="submit">Save</button>
+    <a href="{{ url_for('index') }}">Cancel</a>
+  </form>
+</body>
+</html>
