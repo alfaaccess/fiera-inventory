@@ -2,15 +2,13 @@ from flask import Flask, render_template, request, redirect, url_for, session
 import os
 import secrets
 import json
-
 import gspread
 from google.oauth2.service_account import Credentials
-
 
 app = Flask(__name__)
 
 # ✅ Секретный ключ для сессий:
-# Render: добавь Environment Variable: FLASK_SECRET_KEY = (любой длинный random)
+# На Render добавь Environment Variable: FLASK_SECRET_KEY = (любой длинный random)
 # Локально: если переменной нет — создаст временный ключ (при рестарте сменится)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
@@ -19,9 +17,9 @@ PASSWORDS = {
     "admin": "Alfa7462111",
 }
 
-# --- Google Sheet settings ---
+# ✅ Google Sheet
 SHEET_ID = "1fKdQMb_M6hwQKOjosAfLxfaXdLE56E_3zxPtN1A9S7I"
-WORKSHEET_GID = 135237540  # твой gid
+WORKSHEET_GID = 135237540
 
 # --- НАСТРОЙКИ КОЛОНОК ----------------------------------------
 
@@ -38,34 +36,11 @@ RENAME_COLUMNS = {
 }
 
 
-def move_column(columns, col_name, *, before=None, after=None):
-    """
-    Вспомогательная функция: переместить колонку col_name
-    перед before или после after.
-    Если before/after не найдены, порядок не меняется.
-    """
-    if col_name not in columns:
-        return columns
-
-    cols = columns.copy()
-    cols.remove(col_name)
-
-    if before and before in cols:
-        idx = cols.index(before)
-        cols.insert(idx, col_name)
-    elif after and after in cols:
-        idx = cols.index(after) + 1
-        cols.insert(idx, col_name)
-    else:
-        cols.append(col_name)
-
-    return cols
-
-
 def load_inventory_from_google():
     """
     Читает данные из Google Sheets через Service Account.
-    Service account JSON лежит в переменной окружения GOOGLE_SERVICE_ACCOUNT_JSON
+    JSON сервис-аккаунта хранится в env GOOGLE_SERVICE_ACCOUNT_JSON.
+    Используем get_all_values(), чтобы не падать на дубликатах заголовков.
     """
     try:
         sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -81,82 +56,89 @@ def load_inventory_from_google():
         sheet = client.open_by_key(SHEET_ID)
         worksheet = sheet.get_worksheet_by_id(WORKSHEET_GID)
 
-        # список словарей (ключи = заголовки)
-        raw_rows = worksheet.get_all_records()
-        # заголовки в порядке как в таблице
-        original_headers = worksheet.row_values(1)
+        values = worksheet.get_all_values()
+
+        if not values or len(values) < 2:
+            return [], []
+
+        raw_headers = values[0]
+        raw_rows = values[1:]
 
     except Exception as e:
         print("❌ Google Sheets error:", e)
         return [], []
 
-    # 1) Заголовки (в порядке как в Google Sheets)
-    columns = []
-    header_map = {}
+    # ---------- ЧИСТИМ ЗАГОЛОВКИ (убираем пустые и дубликаты) ----------
+    headers = []
+    header_map = {}  # idx -> header_name
 
-    for h in original_headers:
-        if h is None:
-            continue
-        clean = str(h).strip()
-        header_map[h] = clean
-        if clean and clean not in columns:
-            columns.append(clean)
+    for idx, h in enumerate(raw_headers):
+        clean = (h or "").strip()
 
-    # 2) Чистим строки: удаляем/переименовываем + split Comp Name/Specification
+        if not clean:
+            clean = f"Column_{idx}"
+
+        original = clean
+        counter = 1
+        while clean in headers:
+            clean = f"{original}_{counter}"
+            counter += 1
+
+        header_map[idx] = clean
+        headers.append(clean)
+
+    # ---------- СОБИРАЕМ СТРОКИ ----------
     cleaned_rows = []
-    for raw in raw_rows:
+
+    for row in raw_rows:
         clean_row = {}
 
-        for key, v in raw.items():
-            if key is None:
+        for idx, value in enumerate(row):
+            key = header_map.get(idx)
+            if not key:
                 continue
 
-            key_clean = str(key).strip()
-
-            if key_clean in REMOVE_COLUMNS:
+            if key in REMOVE_COLUMNS:
                 continue
 
-            new_key = RENAME_COLUMNS.get(key_clean, key_clean)
-            val = v.strip() if isinstance(v, str) else v
-            clean_row[new_key] = val
+            new_key = RENAME_COLUMNS.get(key, key)
+            clean_row[new_key] = value.strip() if isinstance(value, str) else value
 
-        # split "Comp Name/Specification" -> "Comp Name" + "Specification"
+        # ---- Comp Name / Specification ----
         full = clean_row.get("Comp Name/Specification")
         if full:
             full = full.strip()
             if " " in full:
-                first_space = full.find(" ")
-                comp_name = full[:first_space]
-                spec = full[first_space + 1:]
+                p = full.find(" ")
+                clean_row["Comp Name"] = full[:p]
+                clean_row["Specification"] = full[p + 1:]
             else:
-                comp_name = full
-                spec = ""
+                clean_row["Comp Name"] = full
+                clean_row["Specification"] = ""
 
-            clean_row["Comp Name"] = comp_name
-            clean_row["Specification"] = spec
             clean_row.pop("Comp Name/Specification", None)
 
         cleaned_rows.append(clean_row)
 
-    # 3) Обновляем список колонок (без удалённых, с учётом переименования)
-    new_columns = []
-    for col in columns:
-        if col in REMOVE_COLUMNS:
+    # ---------- КОЛОНКИ ----------
+    columns = []
+    for h in headers:
+        if h in REMOVE_COLUMNS:
             continue
 
-        renamed = RENAME_COLUMNS.get(col, col)
+        renamed = RENAME_COLUMNS.get(h, h)
 
         if renamed == "Comp Name/Specification":
             for c in ("Comp Name", "Specification"):
-                if c not in new_columns:
-                    new_columns.append(c)
-            continue
-
-        if renamed not in new_columns:
-            new_columns.append(renamed)
+                if c not in columns:
+                    columns.append(c)
+        elif renamed not in columns:
+            columns.append(renamed)
 
     print(f"✅ Loaded {len(cleaned_rows)} rows")
-    return cleaned_rows, new_columns
+    print("✅ Columns:", columns)
+
+    return cleaned_rows, columns
 
 
 # ------------------ ЛОГИН ТОЛЬКО ПО ПАРОЛЮ ------------------
@@ -191,14 +173,17 @@ def index():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
+    # query берём только при POST; при GET будет пусто и ничего не покажется
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
 
     results = []
     columns = []
 
+    # GET: ничего не показываем
     if request.method == "GET":
         return render_template("search.html", query=query, results=results, columns=columns)
 
+    # POST: нажали Search -> грузим данные
     data, columns = load_inventory_from_google()
 
     if query:
@@ -208,10 +193,12 @@ def index():
             if any(q in v for v in values):
                 results.append(row)
     else:
+        # Search с пустым полем -> показываем весь список
         results = data
 
     return render_template("search.html", query=query, results=results, columns=columns)
 
 
 if __name__ == "__main__":
-    app.run()
+    # локально можно debug=True, на Render не нужно
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
