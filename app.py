@@ -1,15 +1,17 @@
 from flask import Flask, render_template, request, redirect, url_for, session
-import csv
-import requests
-from io import StringIO
 import os
 import secrets
+import json
+
+import gspread
+from google.oauth2.service_account import Credentials
+
 
 app = Flask(__name__)
 
 # ✅ Секретный ключ для сессий:
-# 1) На Render добавь Environment Variable: FLASK_SECRET_KEY = (любой длинный random)
-# 2) Локально: если переменной нет — создаст временный ключ (при рестарте сменится)
+# Render: добавь Environment Variable: FLASK_SECRET_KEY = (любой длинный random)
+# Локально: если переменной нет — создаст временный ключ (при рестарте сменится)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
 # ✅ Один пароль (только admin)
@@ -17,11 +19,9 @@ PASSWORDS = {
     "admin": "Alfa7462111",
 }
 
-GOOGLE_CSV_URL = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1fKdQMb_M6hwQKOjosAfLxfaXdLE56E_3zxPtN1A9S7I"
-    "/gviz/tq?tqx=out:csv&gid=135237540"
-)
+# --- Google Sheet settings ---
+SHEET_ID = "1fKdQMb_M6hwQKOjosAfLxfaXdLE56E_3zxPtN1A9S7I"
+WORKSHEET_GID = 135237540  # твой gid
 
 # --- НАСТРОЙКИ КОЛОНОК ----------------------------------------
 
@@ -64,52 +64,63 @@ def move_column(columns, col_name, *, before=None, after=None):
 
 def load_inventory_from_google():
     """
-    Load the Google Sheet (CSV) into a list of dicts
-    and return (rows, columns).
-    Column names are cleaned with strip(), порядок сохраняем.
+    Читает данные из Google Sheets через Service Account.
+    Service account JSON лежит в переменной окружения GOOGLE_SERVICE_ACCOUNT_JSON
     """
     try:
-        resp = requests.get(GOOGLE_CSV_URL, timeout=10)
-        resp.raise_for_status()
+        sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        if not sa_json:
+            raise RuntimeError("Missing env var GOOGLE_SERVICE_ACCOUNT_JSON")
+
+        sa_info = json.loads(sa_json)
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+        client = gspread.authorize(creds)
+
+        sheet = client.open_by_key(SHEET_ID)
+        worksheet = sheet.get_worksheet_by_id(WORKSHEET_GID)
+
+        # список словарей (ключи = заголовки)
+        raw_rows = worksheet.get_all_records()
+        # заголовки в порядке как в таблице
+        original_headers = worksheet.row_values(1)
+
     except Exception as e:
-        print("Error loading Google Sheet:", e)
+        print("❌ Google Sheets error:", e)
         return [], []
 
-    reader = csv.DictReader(StringIO(resp.text))
-    raw_rows = list(reader)
-
-    # 1. Берём исходные заголовки (в порядке, как в Google Sheets)
-    original_headers = reader.fieldnames or []
-
+    # 1) Заголовки (в порядке как в Google Sheets)
     columns = []
     header_map = {}
 
     for h in original_headers:
         if h is None:
             continue
-        clean = h.strip()
+        clean = str(h).strip()
         header_map[h] = clean
-        if clean not in columns:
+        if clean and clean not in columns:
             columns.append(clean)
 
-    # 2. Чистим строки, при этом удаляем и переименовываем колонки
+    # 2) Чистим строки: удаляем/переименовываем + split Comp Name/Specification
     cleaned_rows = []
     for raw in raw_rows:
         clean_row = {}
-        for orig_key, v in raw.items():
-            if orig_key is None:
+
+        for key, v in raw.items():
+            if key is None:
                 continue
 
-            key = header_map[orig_key]  # очищенное имя заголовка
+            key_clean = str(key).strip()
 
-            if key in REMOVE_COLUMNS:
+            if key_clean in REMOVE_COLUMNS:
                 continue
 
-            new_key = RENAME_COLUMNS.get(key, key)
+            new_key = RENAME_COLUMNS.get(key_clean, key_clean)
             val = v.strip() if isinstance(v, str) else v
             clean_row[new_key] = val
 
-        # --------- разделяем Comp Name/Specification на две колонки ---------
+        # split "Comp Name/Specification" -> "Comp Name" + "Specification"
         full = clean_row.get("Comp Name/Specification")
         if full:
             full = full.strip()
@@ -124,11 +135,10 @@ def load_inventory_from_google():
             clean_row["Comp Name"] = comp_name
             clean_row["Specification"] = spec
             clean_row.pop("Comp Name/Specification", None)
-        # --------------------------------------------------------------------
 
         cleaned_rows.append(clean_row)
 
-    # 3. Обновляем список колонок (без удалённых, с учётом переименования)
+    # 3) Обновляем список колонок (без удалённых, с учётом переименования)
     new_columns = []
     for col in columns:
         if col in REMOVE_COLUMNS:
@@ -145,9 +155,7 @@ def load_inventory_from_google():
         if renamed not in new_columns:
             new_columns.append(renamed)
 
-    print(f"Loaded {len(cleaned_rows)} rows")
-    print("Columns:", new_columns)
-
+    print(f"✅ Loaded {len(cleaned_rows)} rows")
     return cleaned_rows, new_columns
 
 
@@ -159,7 +167,6 @@ def login():
     if request.method == "POST":
         password = (request.form.get("password") or "").strip()
 
-        # ищем пароль (сейчас только admin)
         for username, pwd in PASSWORDS.items():
             if password == pwd:
                 session["logged_in"] = True
@@ -184,28 +191,23 @@ def index():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
-    # query берём только при POST; при GET будет пусто и ничего не покажется
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
 
     results = []
     columns = []
 
-    # GET: ничего не показываем
     if request.method == "GET":
         return render_template("search.html", query=query, results=results, columns=columns)
 
-    # POST: нажали Search -> грузим данные
     data, columns = load_inventory_from_google()
 
     if query:
-        # фильтр поиска (как раньше)
         q = query.lower()
         for row in data:
             values = [str(v).lower() for v in row.values() if v is not None]
             if any(q in v for v in values):
                 results.append(row)
     else:
-        # Search с пустым полем -> показываем весь список
         results = data
 
     return render_template("search.html", query=query, results=results, columns=columns)
@@ -213,4 +215,3 @@ def index():
 
 if __name__ == "__main__":
     app.run()
-
