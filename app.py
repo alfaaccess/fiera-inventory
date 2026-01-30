@@ -2,13 +2,17 @@ from flask import Flask, render_template, request, redirect, url_for, session
 import csv
 import requests
 from io import StringIO
+import os
+import secrets
 
 app = Flask(__name__)
 
-# Секретный ключ для сессий (можешь поменять на любой другой рандомный)
-app.secret_key = "change_this_to_any_random_string"
+# ✅ Секретный ключ для сессий:
+# 1) На Render добавь Environment Variable: FLASK_SECRET_KEY = (любой длинный random)
+# 2) Локально: если переменной нет — создаст временный ключ (при рестарте сменится)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
-# Один пароль (только admin)
+# ✅ Один пароль (только admin)
 PASSWORDS = {
     "admin": "Alfa7462111",
 }
@@ -208,4 +212,5 @@ def index():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
+
