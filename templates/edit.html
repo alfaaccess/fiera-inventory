@@ -1,22 +1,86 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>Edit {{ row_id }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+  >
+
+  <style>
+    .page-wrap {
+      width: 98%;
+      max-width: 1000px;
+      margin: 20px auto;
+    }
+    .field-label {
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+  </style>
 </head>
 <body>
-  <h2>Edit row #{{ row_id }}</h2>
 
-  <form method="post">
-    {% for c in columns %}
-      <div style="margin-bottom:10px;">
-        <label style="display:block; font-weight:600;">{{ c }}</label>
-        <input type="text" name="{{ c }}" value="{{ data.get(c,'') }}" style="width:500px;">
+<nav class="navbar navbar-light bg-light mb-4 shadow-sm">
+  <div class="container-fluid">
+    <span class="navbar-brand mb-0 h1">IT Inventory</span>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('index') }}">Back</a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('logout') }}">Logout</a>
+    </div>
+  </div>
+</nav>
+
+<div class="page-wrap">
+
+  <h3 class="mb-3">
+    {% if "new_" in row_id|string %}
+      Add new row ({{ row_id }})
+    {% else %}
+      Edit row #{{ row_id }}
+    {% endif %}
+  </h3>
+
+  <!-- ✅ Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="mb-3">
+        {% for category, message in messages %}
+          <div class="alert alert-{{ 'success' if category=='success' else 'danger' if category=='error' else 'info' }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
       </div>
-    {% endfor %}
+    {% endif %}
+  {% endwith %}
 
-    <button type="submit">Save</button>
-    <a href="{{ url_for('index') }}">Cancel</a>
+  <form method="post" class="card shadow-sm">
+    <div class="card-body">
+      <div class="row g-3">
+        {% for c in columns %}
+          <div class="col-12">
+            <label class="field-label">{{ c }}</label>
+            <input type="text"
+                   class="form-control"
+                   name="{{ c }}"
+                   value="{{ data.get(c,'') }}">
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="d-flex gap-2 mt-4">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Cancel</a>
+      </div>
+    </div>
   </form>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
