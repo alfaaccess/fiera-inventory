@@ -7,10 +7,9 @@ from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
 
-
 app = Flask(__name__)
 
-# ✅ secret для сессий
+# ✅ secret для сессий (Render: env FLASK_SECRET_KEY)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
 # ⏱ Auto logout after inactivity
@@ -34,7 +33,7 @@ RENAME_COLUMNS = {
     "Logmein - Connect Operator": "Logmein Connect Operator",
 }
 
-# Служебные колонки, которые не надо редактировать в форме
+# служебные ключи в dict
 NON_EDITABLE = {"_row_id", "_display_no"}
 
 
@@ -58,7 +57,6 @@ def session_timeout_check():
                 session.clear()
                 return redirect(url_for("login"))
         except Exception:
-            # если вдруг формат сломался — просто сбросим
             session.clear()
             return redirect(url_for("login"))
 
@@ -95,8 +93,8 @@ def parse_sheet_values(values):
 
     Возвращает:
     - cleaned_rows: список dict для отображения (с ключом _row_id)
-    - display_columns: список колонок для таблицы (как ты отображаешь)
-    - combined_headers: реальные комбинированные заголовки sheet (для update)
+    - display_columns: список колонок для таблицы
+    - combined_headers: реальные комбинированные заголовки sheet (для update/insert)
     - raw_row_indices: список row_index (1-based) для каждой строки raw_rows
     - data_start: индекс начала данных (0-based)
     """
@@ -132,16 +130,15 @@ def parse_sheet_values(values):
                 parts.append(cell)
         combined_headers.append(" ".join(parts).strip())
 
-    # 3) columns как раньше (strip, порядок, без дублей)
+    # 3) исходные columns (без дублей)
     columns = []
     for h in combined_headers:
         clean = (h or "").strip()
         if clean and clean not in columns:
             columns.append(clean)
 
-    # 4) собираем строки + ДОБАВЛЯЕМ _row_id = номер строки в Google Sheet (чтобы Edit был везде)
+    # 4) собираем строки + _row_id
     cleaned_rows = []
-
     for row, sheet_row_idx in zip(raw_rows, raw_row_indices):
         clean_row = {}
 
@@ -173,17 +170,14 @@ def parse_sheet_values(values):
                 clean_row["Specification"] = ""
             clean_row.pop("Comp Name/Specification", None)
 
-        # ✅ ВСЕГДА: row_id = номер строки в sheet
+        # ✅ row_id = номер строки в google sheet
         clean_row["_row_id"] = str(sheet_row_idx)
-
-        # (необязательно) можно показать "№" если надо
         clean_row["_display_no"] = (row[0] if row else "").strip()
 
-        # пропускаем пустые строки (кроме служебных)
         if any(v for k, v in clean_row.items() if k not in NON_EDITABLE):
             cleaned_rows.append(clean_row)
 
-    # 5) display_columns как раньше
+    # 5) display_columns
     display_columns = []
     for col in columns:
         if col in REMOVE_COLUMNS:
@@ -239,7 +233,9 @@ def index():
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
 
     if request.method == "GET":
-        return render_template("search.html", query="", results=[], columns=[])
+        # ничего не показываем
+        session["allow_full_table_actions"] = False
+        return render_template("search.html", query="", results=[], columns=[], show_insert=False)
 
     data, columns, _combined_headers, _raw_row_indices, _data_start = load_inventory()
 
@@ -254,10 +250,143 @@ def index():
             ]
             if any(q in v for v in values):
                 results.append(row)
+        show_insert = False
     else:
+        # пустой Search = вся таблица
         results = data
+        show_insert = True
 
-    return render_template("search.html", query=query, results=results, columns=columns)
+    # серверный флажок, чтобы нельзя было дергать insert/delete из поиска
+    session["allow_full_table_actions"] = show_insert
+
+    return render_template("search.html", query=query, results=results, columns=columns, show_insert=show_insert)
+
+
+# ------------------ helper: build row for insert ------------------
+def build_new_row_from_form(form, display_columns, combined_headers):
+    """
+    form содержит display_columns (renamed columns) + Comp Name + Specification
+    combined_headers = заголовки sheet (combined)
+    Возвращает список значений new_row в порядке combined_headers
+    """
+    new_display = {c: (form.get(c) or "").strip() for c in display_columns}
+
+    comp = (new_display.get("Comp Name") or "").strip()
+    spec = (new_display.get("Specification") or "").strip()
+    comp_spec = (comp + (" " + spec if spec else "")).strip()
+
+    new_row = [""] * len(combined_headers)
+
+    for idx, sheet_header in enumerate(combined_headers):
+        if not sheet_header:
+            continue
+        if sheet_header in REMOVE_COLUMNS:
+            continue
+
+        renamed = RENAME_COLUMNS.get(sheet_header, sheet_header)
+
+        if renamed == "Comp Name/Specification":
+            new_row[idx] = comp_spec
+        else:
+            new_row[idx] = new_display.get(renamed, "")
+
+    return new_row
+
+
+# ------------------ row action: above/below/delete (radio selection) ------------------
+@app.route("/row_action", methods=["POST"])
+def row_action():
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
+    # ✅ Разрешаем только когда открыт full table (Search пустой)
+    if not session.get("allow_full_table_actions"):
+        flash("Actions allowed only when Search is empty (full table).", "error")
+        return redirect(url_for("index"))
+
+    action = (request.form.get("action") or "").strip()
+    row_id = (request.form.get("selected_row") or "").strip()
+
+    if not row_id.isdigit():
+        flash("Please select a row first.", "error")
+        return redirect(url_for("index"))
+
+    if action == "delete":
+        ws = get_worksheet()
+        ws.delete_rows(int(row_id))
+        flash("Row deleted.", "success")
+        return redirect(url_for("index"))
+
+    if action == "above":
+        return redirect(url_for("insert_above", row_id=row_id))
+
+    if action == "below":
+        return redirect(url_for("insert_below", row_id=row_id))
+
+    flash("Unknown action.", "error")
+    return redirect(url_for("index"))
+
+
+# ------------------ insert above ------------------
+@app.route("/insert_above/<row_id>", methods=["GET", "POST"])
+def insert_above(row_id):
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
+    if not session.get("allow_full_table_actions"):
+        flash("Insert allowed only when Search is empty (full table).", "error")
+        return redirect(url_for("index"))
+
+    if not str(row_id).isdigit():
+        flash("Invalid row id", "error")
+        return redirect(url_for("index"))
+
+    target_row_index = int(row_id)
+
+    ws = get_worksheet()
+    values = ws.get_all_values()
+    _rows, display_columns, combined_headers, _raw_row_indices, _data_start = parse_sheet_values(values)
+
+    if request.method == "GET":
+        empty = {c: "" for c in display_columns}
+        return render_template("edit.html", row_id=f"new_above_{row_id}", columns=display_columns, data=empty)
+
+    # POST -> insert above
+    new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
+    ws.insert_row(new_row, index=target_row_index, value_input_option="USER_ENTERED")
+    flash("Row inserted above!", "success")
+    return redirect(url_for("index"))
+
+
+# ------------------ insert below ------------------
+@app.route("/insert_below/<row_id>", methods=["GET", "POST"])
+def insert_below(row_id):
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
+    if not session.get("allow_full_table_actions"):
+        flash("Insert allowed only when Search is empty (full table).", "error")
+        return redirect(url_for("index"))
+
+    if not str(row_id).isdigit():
+        flash("Invalid row id", "error")
+        return redirect(url_for("index"))
+
+    target_row_index = int(row_id)
+
+    ws = get_worksheet()
+    values = ws.get_all_values()
+    _rows, display_columns, combined_headers, _raw_row_indices, _data_start = parse_sheet_values(values)
+
+    if request.method == "GET":
+        empty = {c: "" for c in display_columns}
+        return render_template("edit.html", row_id=f"new_below_{row_id}", columns=display_columns, data=empty)
+
+    # POST -> insert below
+    new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
+    ws.insert_row(new_row, index=target_row_index + 1, value_input_option="USER_ENTERED")
+    flash("Row inserted below!", "success")
+    return redirect(url_for("index"))
 
 
 # ------------------ edit ------------------
@@ -266,7 +395,7 @@ def edit(row_id):
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
-    # row_id у нас = номер строки в Google Sheet
+    # row_id = номер строки в Google Sheet
     try:
         sheet_row_index = int(row_id)
     except ValueError:
@@ -275,21 +404,20 @@ def edit(row_id):
 
     ws = get_worksheet()
     values = ws.get_all_values()
-    rows, display_columns, combined_headers, _raw_row_indices, _data_start = parse_sheet_values(values)
+    _rows, display_columns, combined_headers, _raw_row_indices, _data_start = parse_sheet_values(values)
 
     # текущая строка полностью
     current_row = ws.row_values(sheet_row_index)
 
-    # Собираем sheet_dict: combined_header -> value
+    # combined_header -> value
     sheet_dict = {}
     for idx, h in enumerate(combined_headers):
         if not h:
             continue
         sheet_dict[h] = current_row[idx] if idx < len(current_row) else ""
 
-    # --- GET: показать форму ---
+    # --- GET ---
     if request.method == "GET":
-        # применяем rename как при отображении
         temp = {}
         for h, v in sheet_dict.items():
             if h in REMOVE_COLUMNS:
@@ -313,20 +441,15 @@ def edit(row_id):
         form_data = {c: (temp.get(c, "") or "") for c in display_columns}
         return render_template("edit.html", row_id=row_id, columns=display_columns, data=form_data)
 
-    # --- POST: сохранить ---
+    # --- POST save ---
     form = request.form
     new_display = {c: (form.get(c) or "").strip() for c in display_columns}
 
-    # собираем обратно Comp Name/Specification
-    combined_comp = None
-    if "Comp Name" in new_display or "Specification" in new_display:
-        comp = (new_display.get("Comp Name") or "").strip()
-        spec = (new_display.get("Specification") or "").strip()
-        combined_comp = (comp + (" " + spec if spec else "")).strip()
+    comp = (new_display.get("Comp Name") or "").strip()
+    spec = (new_display.get("Specification") or "").strip()
+    combined_comp = (comp + (" " + spec if spec else "")).strip()
 
-    # Собираем обновления: col_index(1-based) -> value
     updates = {}
-
     for idx, sheet_header in enumerate(combined_headers):
         if not sheet_header:
             continue
@@ -335,24 +458,17 @@ def edit(row_id):
 
         renamed = RENAME_COLUMNS.get(sheet_header, sheet_header)
 
-        # Comp Name/Specification пишем в оригинальную колонку
         if renamed == "Comp Name/Specification":
-            if combined_comp is not None:
-                updates[idx + 1] = combined_comp
+            updates[idx + 1] = combined_comp
             continue
 
-        # обычные поля
         if renamed in new_display:
             updates[idx + 1] = new_display[renamed]
 
     try:
-        cells = []
-        for col_idx_1based, val in updates.items():
-            cells.append(gspread.Cell(sheet_row_index, col_idx_1based, val))
-
+        cells = [gspread.Cell(sheet_row_index, col_idx, val) for col_idx, val in updates.items()]
         if cells:
             ws.update_cells(cells, value_input_option="USER_ENTERED")
-
         flash("Saved!", "success")
     except Exception as e:
         flash(f"Save error: {e}", "error")
