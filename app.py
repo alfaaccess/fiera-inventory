@@ -16,7 +16,7 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 SESSION_TIMEOUT = timedelta(minutes=15)
 
 # ✅ пароль
-PASSWORDS = {"admin": "Alfa7612155"}
+PASSWORDS = {"admin": "Alfa7462111"}
 
 # ✅ Google Sheet
 SHEET_ID = "1fKdQMb_M6hwQKOjosAfLxfaXdLE56E_3zxPtN1A9S7I"
@@ -31,6 +31,7 @@ RENAME_COLUMNS = {
     "UVNC - Connect IP address": "IP address",
     "LAN Tempera Controller Password": "3DEYE ACCOUNTS Password",
     "Logmein - Connect Operator": "Logmein Connect Operator",
+    "Windows 10 Maps #": "Display number",
 }
 
 # служебные ключи в dict
@@ -154,6 +155,7 @@ def parse_sheet_values(values):
             value = row[idx] if idx < len(row) else ""
             val = value.strip() if isinstance(value, str) else value
 
+            # не перезаписываем при дублях
             if new_key not in clean_row:
                 clean_row[new_key] = val
 
@@ -170,14 +172,15 @@ def parse_sheet_values(values):
                 clean_row["Specification"] = ""
             clean_row.pop("Comp Name/Specification", None)
 
-        # ✅ row_id = номер строки в google sheet
+        # ✅ row_id = номер строки в google sheet (для Edit/Delete/Insert)
         clean_row["_row_id"] = str(sheet_row_idx)
         clean_row["_display_no"] = (row[0] if row else "").strip()
 
+        # пропускаем пустые строки (кроме служебных)
         if any(v for k, v in clean_row.items() if k not in NON_EDITABLE):
             cleaned_rows.append(clean_row)
 
-    # 5) display_columns
+    # 5) display_columns (для таблицы и формы)
     display_columns = []
     for col in columns:
         if col in REMOVE_COLUMNS:
@@ -213,7 +216,13 @@ def login():
                 session["logged_in"] = True
                 session["user"] = username
                 session["last_activity"] = datetime.utcnow().isoformat()
-                return redirect(url_for("index"))
+
+                # ✅ дефолт: после логина показываем full table
+                session["last_query"] = ""
+                session["last_show_insert"] = True
+                session["allow_full_table_actions"] = True
+
+                return redirect(url_for("last"))
         error = "Incorrect password"
     return render_template("login.html", error=error)
 
@@ -233,8 +242,10 @@ def index():
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
 
     if request.method == "GET":
-        # ничего не показываем
+        # ничего не показываем, но запоминаем, что это НЕ full table
         session["allow_full_table_actions"] = False
+        session["last_query"] = ""
+        session["last_show_insert"] = False
         return render_template("search.html", query="", results=[], columns=[], show_insert=False)
 
     data, columns, _combined_headers, _raw_row_indices, _data_start = load_inventory()
@@ -256,10 +267,52 @@ def index():
         results = data
         show_insert = True
 
-    # серверный флажок, чтобы нельзя было дергать insert/delete из поиска
+    # ✅ серверный флажок, чтобы нельзя было дергать insert/delete из поиска
     session["allow_full_table_actions"] = show_insert
 
+    # ✅ запоминаем последний экран (для возврата после Save/Insert/Delete)
+    session["last_query"] = query
+    session["last_show_insert"] = show_insert
+
     return render_template("search.html", query=query, results=results, columns=columns, show_insert=show_insert)
+
+
+# ------------------ return to last view ------------------
+@app.route("/last", methods=["GET"])
+def last():
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
+    query = (session.get("last_query") or "").strip()
+
+    data, columns, _combined_headers, _raw_row_indices, _data_start = load_inventory()
+
+    if query:
+        q = query.lower()
+        results = []
+        for row in data:
+            values = [
+                str(v).lower()
+                for k, v in row.items()
+                if v is not None and k not in NON_EDITABLE
+            ]
+            if any(q in v for v in values):
+                results.append(row)
+        show_insert = False
+    else:
+        results = data
+        show_insert = True
+
+    session["allow_full_table_actions"] = show_insert
+    session["last_show_insert"] = show_insert
+
+    return render_template(
+        "search.html",
+        query=query,
+        results=results,
+        columns=columns,
+        show_insert=show_insert,
+    )
 
 
 # ------------------ helper: build row for insert ------------------
@@ -302,20 +355,23 @@ def row_action():
     # ✅ Разрешаем только когда открыт full table (Search пустой)
     if not session.get("allow_full_table_actions"):
         flash("Actions allowed only when Search is empty (full table).", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("last"))
 
     action = (request.form.get("action") or "").strip()
     row_id = (request.form.get("selected_row") or "").strip()
 
     if not row_id.isdigit():
         flash("Please select a row first.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("last"))
 
     if action == "delete":
-        ws = get_worksheet()
-        ws.delete_rows(int(row_id))
-        flash("Row deleted.", "success")
-        return redirect(url_for("index"))
+        try:
+            ws = get_worksheet()
+            ws.delete_rows(int(row_id))
+            flash("Row deleted.", "success")
+        except Exception as e:
+            flash(f"Delete error: {e}", "error")
+        return redirect(url_for("last"))
 
     if action == "above":
         return redirect(url_for("insert_above", row_id=row_id))
@@ -324,7 +380,7 @@ def row_action():
         return redirect(url_for("insert_below", row_id=row_id))
 
     flash("Unknown action.", "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("last"))
 
 
 # ------------------ insert above ------------------
@@ -335,11 +391,11 @@ def insert_above(row_id):
 
     if not session.get("allow_full_table_actions"):
         flash("Insert allowed only when Search is empty (full table).", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("last"))
 
     if not str(row_id).isdigit():
         flash("Invalid row id", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("last"))
 
     target_row_index = int(row_id)
 
@@ -352,10 +408,14 @@ def insert_above(row_id):
         return render_template("edit.html", row_id=f"new_above_{row_id}", columns=display_columns, data=empty)
 
     # POST -> insert above
-    new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
-    ws.insert_row(new_row, index=target_row_index, value_input_option="USER_ENTERED")
-    flash("Row inserted above!", "success")
-    return redirect(url_for("index"))
+    try:
+        new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
+        ws.insert_row(new_row, index=target_row_index, value_input_option="USER_ENTERED")
+        flash("Row inserted above!", "success")
+    except Exception as e:
+        flash(f"Insert error: {e}", "error")
+
+    return redirect(url_for("last"))
 
 
 # ------------------ insert below ------------------
@@ -366,11 +426,11 @@ def insert_below(row_id):
 
     if not session.get("allow_full_table_actions"):
         flash("Insert allowed only when Search is empty (full table).", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("last"))
 
     if not str(row_id).isdigit():
         flash("Invalid row id", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("last"))
 
     target_row_index = int(row_id)
 
@@ -383,10 +443,14 @@ def insert_below(row_id):
         return render_template("edit.html", row_id=f"new_below_{row_id}", columns=display_columns, data=empty)
 
     # POST -> insert below
-    new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
-    ws.insert_row(new_row, index=target_row_index + 1, value_input_option="USER_ENTERED")
-    flash("Row inserted below!", "success")
-    return redirect(url_for("index"))
+    try:
+        new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
+        ws.insert_row(new_row, index=target_row_index + 1, value_input_option="USER_ENTERED")
+        flash("Row inserted below!", "success")
+    except Exception as e:
+        flash(f"Insert error: {e}", "error")
+
+    return redirect(url_for("last"))
 
 
 # ------------------ edit ------------------
@@ -400,7 +464,7 @@ def edit(row_id):
         sheet_row_index = int(row_id)
     except ValueError:
         flash("Invalid row id", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("last"))
 
     ws = get_worksheet()
     values = ws.get_all_values()
@@ -473,7 +537,7 @@ def edit(row_id):
     except Exception as e:
         flash(f"Save error: {e}", "error")
 
-    return redirect(url_for("index"))
+    return redirect(url_for("last"))
 
 
 if __name__ == "__main__":
