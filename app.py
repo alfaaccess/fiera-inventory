@@ -41,8 +41,8 @@ NON_EDITABLE = {"_row_id", "_display_no"}
 # -------------------- SESSION TIMEOUT --------------------
 @app.before_request
 def session_timeout_check():
-    # пропускаем login и static
-    if request.endpoint in ("login", "static"):
+    # пропускаем login, static, ping, activity
+    if request.endpoint in ("login", "static", "ping", "activity"):
         return
 
     if not session.get("logged_in"):
@@ -61,7 +61,6 @@ def session_timeout_check():
             session.clear()
             return redirect(url_for("login"))
 
-    session["last_activity"] = now.isoformat()
 
 
 # -------------------- Google client --------------------
@@ -314,6 +313,34 @@ def last():
         show_insert=show_insert,
     )
 
+@app.route("/ping", methods=["GET"])
+def ping():
+    # если не залогинен — 401
+    if not session.get("logged_in"):
+        return ("", 401)
+
+    # проверяем таймаут по last_activity (и НЕ обновляем last_activity тут)
+    last_activity = session.get("last_activity")
+    if last_activity:
+        try:
+            last_dt = datetime.fromisoformat(last_activity)
+            if datetime.utcnow() - last_dt > SESSION_TIMEOUT:
+                session.clear()
+                return ("", 401)
+        except Exception:
+            session.clear()
+            return ("", 401)
+
+    return ("", 204)
+
+@app.route("/activity", methods=["POST"])
+def activity():
+    if not session.get("logged_in"):
+        return ("", 401)
+
+    session["last_activity"] = datetime.utcnow().isoformat()
+    return ("", 204)
+
 
 # ------------------ helper: build row for insert ------------------
 def build_new_row_from_form(form, display_columns, combined_headers):
@@ -542,3 +569,4 @@ def edit(row_id):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+
