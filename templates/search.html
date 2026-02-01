@@ -38,7 +38,10 @@
         /* ✅ заголовки НЕ ломаем */
         .results-table th {
             white-space: nowrap;
-            word-break: normal;
+            word-break: keep-all; 
+            overflow-wrap: anywhere; 
+            line-height: 1.15;
+            text-align: center;
         }
 
         /* ✅ ячейки можно переносить */
@@ -61,7 +64,8 @@
         }
 
         .edit-col {
-            width: 90px;
+            width: 110px;
+            min-width: 110px;
             text-align: center;
             white-space: nowrap;
         }
