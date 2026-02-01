@@ -30,7 +30,7 @@ RENAME_COLUMNS = {
     "Maps Access 3DEYE ACCOUNTS Username": "3DEYE ACCOUNTS Username",
     "UVNC - Connect IP address": "IP address",
     "LAN Tempera Controller Password": "3DEYE ACCOUNTS Password",
-    "Logmein - Connect Operator": "Logmein Connect Operator",
+    "Logmein - Connect Operator": "User Operator",
     "Windows 10 Maps #": "Display number",
 }
 
@@ -532,3 +532,4 @@ def edit(row_id):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+
