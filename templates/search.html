@@ -11,91 +11,95 @@
     >
 
     <style>
-        body { background:#fff; }
+    body { background:#fff; }
 
-        .search-wrapper {
-            min-height: 35vh;
-            display:flex;
-            justify-content:center;
-            align-items:center;
-            text-align:center;
-        }
+    .search-wrapper {
+        min-height: 35vh;
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        text-align:center;
+    }
 
-        .results-table {
-            width: 100%;
-            font-size: 0.78rem;
-            table-layout: fixed; 
-            border-collapse: collapse;
-        }
+    /* ✅ важно: AUTO, иначе на телефоне будет "вертикальный текст" */
+    .results-table {
+        width: 100%;
+        font-size: 0.78rem;
+        table-layout: auto;          /* ✅ ключ */
+        border-collapse: collapse;
+    }
 
-        .results-table th,
-        .results-table td {
-            padding: 4px 6px;
-            vertical-align: middle;
-        }
+    /* ✅ Центруем ВСЕ заголовки и ВСЕ данные */
+    .results-table th,
+    .results-table td {
+        padding: 4px 6px;
+        vertical-align: middle;
+        text-align: center;          /* ✅ центр всего */
+    }
 
-        /* ✅ заголовки НЕ ломаем */
-        .results-table th {
-            white-space: normal;
-            word-break: normal;
-            overflow-wrap: break-word; 
-            line-height: 1.15;
-            text-align: center;
-        }
+    /* ✅ Заголовки: можно переносить по словам, НЕ по буквам */
+    .results-table th {
+        white-space: normal;
+        word-break: keep-all;        /* ✅ не ломать слова */
+        overflow-wrap: break-word;   /* ✅ переносить аккуратно */
+        line-height: 1.15;
+    }
 
-        /* ✅ ячейки можно переносить */
-        .results-table td {
-            white-space: normal;
-            word-break: break-word;
-            overflow-wrap: break-word;
-        }
+    /* ✅ Данные: тоже без "вертикальных букв" */
+    .results-table td {
+        white-space: normal;
+        word-break: normal;          /* ✅ не ломаем по буквам */
+        overflow-wrap: anywhere;     /* ✅ если очень длинно — перенесёт */
+    }
 
-        .phone-col {
-            min-width: 170px;
-            max-width: 200px;
-            white-space: normal;
-        }
+    /* телефонная колонка */
+    .phone-col {
+        min-width: 170px;
+        max-width: 220px;
+        white-space: normal;
+    }
 
-        .full-container {
-            width: 98%;
-            max-width: 1800px;
-            margin: auto;
-        }
+    .full-container {
+        width: 98%;
+        max-width: 1800px;
+        margin: auto;
+    }
 
-        .edit-col {
-            width: 110px;
-            min-width: 110px;
-            text-align: center;
-            white-space: nowrap;
-        }
+    /* ✅ чтобы Edit не становился Ed / it */
+    .edit-col {
+        width: 110px;
+        min-width: 110px;
+        text-align: center;
+        white-space: nowrap;
+    }
 
-        .select-col {
-            width: 44px;
-            text-align: center;
-            white-space: nowrap;
-        }
+    .select-col {
+        width: 44px;
+        text-align: center;
+        white-space: nowrap;
+    }
 
-        .table-scroll {
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-        }
+    /* ✅ скролл на мобиле если не влазит */
+    .table-scroll {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
 
-        .actions-bar {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            background: #fff;
-            padding-top: 6px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid rgba(0,0,0,.08);
-        }
+    .actions-bar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: #fff;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(0,0,0,.08);
+    }
 
-        @media (max-width: 576px) {
-            .search-wrapper { min-height: 22vh; }
-            .results-table { font-size: 0.72rem; }
-        }
-    </style>
-
+    @media (max-width: 576px) {
+        .search-wrapper { min-height: 22vh; }
+        .results-table { font-size: 0.72rem; }
+    }
+</style>
     <script>
       // ✅ radio toggle: повторный клик/тап снимает выделение (работает на телефоне)
       document.addEventListener("DOMContentLoaded", function () {
