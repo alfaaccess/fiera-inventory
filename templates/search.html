@@ -23,17 +23,29 @@
 
         .results-table {
             width: 100%;
+            min-width: 1100px;      /* 👈 важно */
             font-size: 0.78rem;
-            table-layout: fixed;
+            table-layout: auto;     /* 👈 ключевая правка */
             border-collapse: collapse;
         }
 
         .results-table th,
         .results-table td {
             padding: 4px 6px;
+            vertical-align: middle;
+        }
+
+        /* ✅ заголовки НЕ ломаем */
+        .results-table th {
+            white-space: nowrap;
+            word-break: normal;
+        }
+
+        /* ✅ ячейки можно переносить */
+        .results-table td {
             white-space: normal;
             word-break: break-word;
-            vertical-align: middle;
+            overflow-wrap: break-word;
         }
 
         .phone-col {
