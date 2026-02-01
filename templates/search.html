@@ -23,9 +23,8 @@
 
         .results-table {
             width: 100%;
-            min-width: 1100px;      /* 👈 важно */
             font-size: 0.78rem;
-            table-layout: auto;     /* 👈 ключевая правка */
+            table-layout: fixed; 
             border-collapse: collapse;
         }
 
@@ -37,9 +36,9 @@
 
         /* ✅ заголовки НЕ ломаем */
         .results-table th {
-            white-space: nowrap;
-            word-break: keep-all; 
-            overflow-wrap: anywhere; 
+            white-space: normal;
+            word-break: normal;
+            overflow-wrap: break-word; 
             line-height: 1.15;
             text-align: center;
         }
