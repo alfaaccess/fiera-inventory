@@ -41,7 +41,7 @@ NON_EDITABLE = {"_row_id", "_display_no"}
 # -------------------- SESSION TIMEOUT --------------------
 @app.before_request
 def session_timeout_check():
-    # пропускаем login, static, ping, activity
+    # пропускаем login, static и ping/activity (они сами решают)
     if request.endpoint in ("login", "static", "ping", "activity"):
         return
 
@@ -60,7 +60,6 @@ def session_timeout_check():
         except Exception:
             session.clear()
             return redirect(url_for("login"))
-
 
 
 # -------------------- Google client --------------------
@@ -88,16 +87,6 @@ def is_data_row_start(first_cell: str) -> bool:
 
 
 def parse_sheet_values(values):
-    """
-    values = worksheet.get_all_values()
-
-    Возвращает:
-    - cleaned_rows: список dict для отображения (с ключом _row_id)
-    - display_columns: список колонок для таблицы
-    - combined_headers: реальные комбинированные заголовки sheet (для update/insert)
-    - raw_row_indices: список row_index (1-based) для каждой строки raw_rows
-    - data_start: индекс начала данных (0-based)
-    """
     if not values or len(values) < 2:
         return [], [], [], [], None
 
@@ -154,7 +143,6 @@ def parse_sheet_values(values):
             value = row[idx] if idx < len(row) else ""
             val = value.strip() if isinstance(value, str) else value
 
-            # не перезаписываем при дублях
             if new_key not in clean_row:
                 clean_row[new_key] = val
 
@@ -171,11 +159,9 @@ def parse_sheet_values(values):
                 clean_row["Specification"] = ""
             clean_row.pop("Comp Name/Specification", None)
 
-        # ✅ row_id = номер строки в google sheet (для Edit/Delete/Insert)
         clean_row["_row_id"] = str(sheet_row_idx)
         clean_row["_display_no"] = (row[0] if row else "").strip()
 
-        # пропускаем пустые строки (кроме служебных)
         if any(v for k, v in clean_row.items() if k not in NON_EDITABLE):
             cleaned_rows.append(clean_row)
 
@@ -212,11 +198,12 @@ def login():
         password = (request.form.get("password") or "").strip()
         for username, pwd in PASSWORDS.items():
             if password == pwd:
+                session.clear()
                 session["logged_in"] = True
                 session["user"] = username
                 session["last_activity"] = datetime.utcnow().isoformat()
 
-                # ✅ дефолт: после логина показываем full table
+                # после логина сразу full table
                 session["last_query"] = ""
                 session["last_show_insert"] = True
                 session["allow_full_table_actions"] = True
@@ -241,7 +228,6 @@ def index():
     query = request.form.get("q", "").strip() if request.method == "POST" else ""
 
     if request.method == "GET":
-        # ничего не показываем, но запоминаем, что это НЕ full table
         session["allow_full_table_actions"] = False
         session["last_query"] = ""
         session["last_show_insert"] = False
@@ -253,23 +239,21 @@ def index():
         q = query.lower()
         results = []
         for row in data:
-            values = [
+            vals = [
                 str(v).lower()
                 for k, v in row.items()
                 if v is not None and k not in NON_EDITABLE
             ]
-            if any(q in v for v in values):
+            if any(q in v for v in vals):
                 results.append(row)
         show_insert = False
     else:
-        # пустой Search = вся таблица
         results = data
         show_insert = True
 
-    # ✅ серверный флажок, чтобы нельзя было дергать insert/delete из поиска
     session["allow_full_table_actions"] = show_insert
 
-    # ✅ запоминаем последний экран (для возврата после Save/Insert/Delete)
+    # запоминаем экран для возврата
     session["last_query"] = query
     session["last_show_insert"] = show_insert
 
@@ -290,12 +274,12 @@ def last():
         q = query.lower()
         results = []
         for row in data:
-            values = [
+            vals = [
                 str(v).lower()
                 for k, v in row.items()
                 if v is not None and k not in NON_EDITABLE
             ]
-            if any(q in v for v in values):
+            if any(q in v for v in vals):
                 results.append(row)
         show_insert = False
     else:
@@ -305,21 +289,15 @@ def last():
     session["allow_full_table_actions"] = show_insert
     session["last_show_insert"] = show_insert
 
-    return render_template(
-        "search.html",
-        query=query,
-        results=results,
-        columns=columns,
-        show_insert=show_insert,
-    )
+    return render_template("search.html", query=query, results=results, columns=columns, show_insert=show_insert)
 
+
+# ------------------ ping/activity for idle logout ------------------
 @app.route("/ping", methods=["GET"])
 def ping():
-    # если не залогинен — 401
     if not session.get("logged_in"):
         return ("", 401)
 
-    # проверяем таймаут по last_activity (и НЕ обновляем last_activity тут)
     last_activity = session.get("last_activity")
     if last_activity:
         try:
@@ -333,22 +311,17 @@ def ping():
 
     return ("", 204)
 
+
 @app.route("/activity", methods=["POST"])
 def activity():
     if not session.get("logged_in"):
         return ("", 401)
-
     session["last_activity"] = datetime.utcnow().isoformat()
     return ("", 204)
 
 
 # ------------------ helper: build row for insert ------------------
 def build_new_row_from_form(form, display_columns, combined_headers):
-    """
-    form содержит display_columns (renamed columns) + Comp Name + Specification
-    combined_headers = заголовки sheet (combined)
-    Возвращает список значений new_row в порядке combined_headers
-    """
     new_display = {c: (form.get(c) or "").strip() for c in display_columns}
 
     comp = (new_display.get("Comp Name") or "").strip()
@@ -373,13 +346,12 @@ def build_new_row_from_form(form, display_columns, combined_headers):
     return new_row
 
 
-# ------------------ row action: above/below/delete (radio selection) ------------------
+# ------------------ row action: above/below/delete ------------------
 @app.route("/row_action", methods=["POST"])
 def row_action():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
-    # ✅ Разрешаем только когда открыт full table (Search пустой)
     if not session.get("allow_full_table_actions"):
         flash("Actions allowed only when Search is empty (full table).", "error")
         return redirect(url_for("last"))
@@ -434,7 +406,6 @@ def insert_above(row_id):
         empty = {c: "" for c in display_columns}
         return render_template("edit.html", row_id=f"new_above_{row_id}", columns=display_columns, data=empty)
 
-    # POST -> insert above
     try:
         new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
         ws.insert_row(new_row, index=target_row_index, value_input_option="USER_ENTERED")
@@ -469,7 +440,6 @@ def insert_below(row_id):
         empty = {c: "" for c in display_columns}
         return render_template("edit.html", row_id=f"new_below_{row_id}", columns=display_columns, data=empty)
 
-    # POST -> insert below
     try:
         new_row = build_new_row_from_form(request.form, display_columns, combined_headers)
         ws.insert_row(new_row, index=target_row_index + 1, value_input_option="USER_ENTERED")
@@ -486,7 +456,6 @@ def edit(row_id):
     if not session.get("logged_in"):
         return redirect(url_for("login"))
 
-    # row_id = номер строки в Google Sheet
     try:
         sheet_row_index = int(row_id)
     except ValueError:
@@ -497,17 +466,14 @@ def edit(row_id):
     values = ws.get_all_values()
     _rows, display_columns, combined_headers, _raw_row_indices, _data_start = parse_sheet_values(values)
 
-    # текущая строка полностью
     current_row = ws.row_values(sheet_row_index)
 
-    # combined_header -> value
     sheet_dict = {}
     for idx, h in enumerate(combined_headers):
         if not h:
             continue
         sheet_dict[h] = current_row[idx] if idx < len(current_row) else ""
 
-    # --- GET ---
     if request.method == "GET":
         temp = {}
         for h, v in sheet_dict.items():
@@ -517,7 +483,6 @@ def edit(row_id):
             if new_key not in temp:
                 temp[new_key] = v
 
-        # split Comp Name/Specification
         full = (temp.get("Comp Name/Specification") or "").strip()
         if full:
             if " " in full:
@@ -532,9 +497,7 @@ def edit(row_id):
         form_data = {c: (temp.get(c, "") or "") for c in display_columns}
         return render_template("edit.html", row_id=row_id, columns=display_columns, data=form_data)
 
-    # --- POST save ---
-    form = request.form
-    new_display = {c: (form.get(c) or "").strip() for c in display_columns}
+    new_display = {c: (request.form.get(c) or "").strip() for c in display_columns}
 
     comp = (new_display.get("Comp Name") or "").strip()
     spec = (new_display.get("Specification") or "").strip()
@@ -569,4 +532,3 @@ def edit(row_id):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-
