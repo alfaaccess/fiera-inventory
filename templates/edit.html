@@ -14,21 +14,24 @@
     .page-wrap {
       width: 98%;
       max-width: 1000px;
-      margin: 20px auto;
+      margin: 16px auto;
     }
-    .field-label {
-      font-weight: 600;
-      margin-bottom: 6px;
+
+    .field-label { font-weight: 600; margin-bottom: 6px; }
+
+    /* ✅ на телефоне делаем поля чуть выше */
+    @media (max-width: 576px) {
+      .form-control { padding: .7rem .75rem; }
     }
   </style>
 </head>
 <body>
 
-<nav class="navbar navbar-light bg-light mb-4 shadow-sm">
+<nav class="navbar navbar-light bg-light mb-3 shadow-sm">
   <div class="container-fluid">
     <span class="navbar-brand mb-0 h1">IT Inventory</span>
     <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('index') }}">Back</a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('last') }}">Back</a>
       <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('logout') }}">Logout</a>
     </div>
   </div>
@@ -36,15 +39,14 @@
 
 <div class="page-wrap">
 
-  <h3 class="mb-3">
+  <h4 class="mb-3">
     {% if "new_" in row_id|string %}
       Add new row ({{ row_id }})
     {% else %}
       Edit row #{{ row_id }}
     {% endif %}
-  </h3>
+  </h4>
 
-  <!-- ✅ Flash messages -->
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
       <div class="mb-3">
@@ -74,7 +76,7 @@
 
       <div class="d-flex gap-2 mt-4">
         <button type="submit" class="btn btn-primary">Save</button>
-        <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Cancel</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('last') }}">Cancel</a>
       </div>
     </div>
   </form>
@@ -82,5 +84,41 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- ✅ Auto-logout JS: ping + activity (такой же как на search) -->
+<script>
+  setInterval(async () => {
+    try {
+      const res = await fetch("{{ url_for('ping') }}", { cache: "no-store" });
+      if (res.status === 401) {
+        window.location.href = "{{ url_for('login') }}";
+      }
+    } catch (e) {}
+  }, 60000);
+
+  let lastSent = 0;
+  async function sendActivity() {
+    const now = Date.now();
+    if (now - lastSent < 15000) return;
+    lastSent = now;
+
+    try {
+      const res = await fetch("{{ url_for('activity') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        cache: "no-store"
+      });
+      if (res.status === 401) {
+        window.location.href = "{{ url_for('login') }}";
+      }
+    } catch (e) {}
+  }
+
+  ["click","keydown","mousemove","touchstart","scroll"].forEach(evt => {
+    window.addEventListener(evt, sendActivity, { passive: true });
+  });
+</script>
+
 </body>
 </html>
