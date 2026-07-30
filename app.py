@@ -35,7 +35,12 @@ RENAME_COLUMNS = {
 }
 
 # служебные ключи в dict
-NON_EDITABLE = {"_row_id", "_display_no"}
+NON_EDITABLE = {
+    "_row_id",
+    "_display_no",
+    "_is_group",
+    "_group_name",
+}
 
 
 # -------------------- SESSION TIMEOUT --------------------
@@ -114,7 +119,13 @@ def parse_sheet_values(values):
     for col_idx in range(max_cols):
         parts = []
         for hr in header_rows:
-            cell = hr[col_idx].strip() if col_idx < len(hr) and hr[col_idx] else ""
+            # Google Sheets header may contain a manual line break.
+            # Normalize all whitespace so HTML form field names stay stable.
+            cell = (
+                " ".join(str(hr[col_idx]).split())
+                if col_idx < len(hr) and hr[col_idx]
+                else ""
+            )
             if cell:
                 parts.append(cell)
         combined_headers.append(" ".join(parts).strip())
@@ -130,6 +141,29 @@ def parse_sheet_values(values):
     cleaned_rows = []
     for row, sheet_row_idx in zip(raw_rows, raw_row_indices):
         clean_row = {}
+
+        # A group row has one title cell only. Detect it by structure instead
+        # of relying on a word such as "Displays" in the group name.
+        group_name = ""
+        raw_nonempty = []
+        for raw_idx, raw_value in enumerate(row):
+            normalized_value = " ".join(str(raw_value or "").split())
+            if normalized_value:
+                raw_nonempty.append((raw_idx, normalized_value))
+
+        if len(raw_nonempty) == 1:
+            group_col_idx, possible_group_name = raw_nonempty[0]
+            if group_col_idx < len(combined_headers):
+                group_sheet_header = combined_headers[group_col_idx]
+                group_display_header = RENAME_COLUMNS.get(
+                    group_sheet_header,
+                    group_sheet_header,
+                )
+                if group_display_header in {
+                    "Display number",
+                    "Comp Name/Specification",
+                }:
+                    group_name = possible_group_name
 
         for idx, header in enumerate(combined_headers):
             if not header:
@@ -161,6 +195,8 @@ def parse_sheet_values(values):
 
         clean_row["_row_id"] = str(sheet_row_idx)
         clean_row["_display_no"] = (row[0] if row else "").strip()
+        clean_row["_is_group"] = bool(group_name)
+        clean_row["_group_name"] = group_name
 
         if any(v for k, v in clean_row.items() if k not in NON_EDITABLE):
             cleaned_rows.append(clean_row)
@@ -532,4 +568,3 @@ def edit(row_id):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-
