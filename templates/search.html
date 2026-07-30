@@ -79,6 +79,24 @@
         white-space: nowrap;
     }
 
+    /* Group title rows imported from Google Sheets */
+    .results-table tr.group-row > td {
+        background: #e8f1ff !important;
+        border-top: 2px solid #9ec5fe;
+        border-bottom: 2px solid #9ec5fe;
+        padding-top: 9px;
+        padding-bottom: 9px;
+    }
+
+    .results-table .group-title {
+        color: #17365d;
+        font-size: 0.92rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        text-align: center;
+        white-space: normal;
+    }
+
     /* ✅ скролл на мобиле если не влазит */
     .table-scroll {
         overflow-x: auto;
@@ -185,6 +203,13 @@
 
     {% if results %}
 
+        {% set visible_columns = namespace(count=0) %}
+        {% for col in columns %}
+            {% if col not in ["LAN Tempera Controller Password", "Windows 10 Maps #"] %}
+                {% set visible_columns.count = visible_columns.count + 1 %}
+            {% endif %}
+        {% endfor %}
+
         {% if show_insert %}
             <form id="rowActionsForm" method="post" action="{{ url_for('row_action') }}">
 
@@ -229,34 +254,61 @@
 
                         <tbody>
                             {% for row in results %}
-                                <tr>
-                                    <td class="select-col">
-                                        {% if row.get("_row_id") %}
-                                            <input type="radio" name="selected_row" value="{{ row.get('_row_id') }}">
-                                        {% else %}
-                                            —
-                                        {% endif %}
-                                    </td>
+                                {% if row.get("_is_group") %}
+                                    <tr class="group-row">
+                                        <td class="select-col">
+                                            {% if row.get("_row_id") %}
+                                                <input type="radio" name="selected_row" value="{{ row.get('_row_id') }}">
+                                            {% else %}
+                                                —
+                                            {% endif %}
+                                        </td>
 
-                                    {% for col in columns %}
-                                        {% if col not in ["LAN Tempera Controller Password", "Windows 10 Maps #"] %}
-                                            <td class="{% if col == 'Phone' %}phone-col{% endif %}">
-                                                {{ row.get(col, "") }}
-                                            </td>
-                                        {% endif %}
-                                    {% endfor %}
+                                        <td class="group-title" colspan="{{ visible_columns.count }}">
+                                            {{ row.get("_group_name", "") }}
+                                        </td>
 
-                                    <td class="edit-col">
-                                        {% if row.get("_row_id") %}
-                                            <a class="btn btn-sm btn-outline-primary"
-                                               href="{{ url_for('edit', row_id=row.get('_row_id')) }}">
-                                                Edit
-                                            </a>
-                                        {% else %}
-                                            <span class="text-muted">—</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
+                                        <td class="edit-col">
+                                            {% if row.get("_row_id") %}
+                                                <a class="btn btn-sm btn-outline-primary"
+                                                   href="{{ url_for('edit', row_id=row.get('_row_id')) }}">
+                                                    Edit
+                                                </a>
+                                            {% else %}
+                                                <span class="text-muted">—</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% else %}
+                                    <tr>
+                                        <td class="select-col">
+                                            {% if row.get("_row_id") %}
+                                                <input type="radio" name="selected_row" value="{{ row.get('_row_id') }}">
+                                            {% else %}
+                                                —
+                                            {% endif %}
+                                        </td>
+
+                                        {% for col in columns %}
+                                            {% if col not in ["LAN Tempera Controller Password", "Windows 10 Maps #"] %}
+                                                <td class="{% if col == 'Phone' %}phone-col{% endif %}">
+                                                    {{ row.get(col, "") }}
+                                                </td>
+                                            {% endif %}
+                                        {% endfor %}
+
+                                        <td class="edit-col">
+                                            {% if row.get("_row_id") %}
+                                                <a class="btn btn-sm btn-outline-primary"
+                                                   href="{{ url_for('edit', row_id=row.get('_row_id')) }}">
+                                                    Edit
+                                                </a>
+                                            {% else %}
+                                                <span class="text-muted">—</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endif %}
                             {% endfor %}
                         </tbody>
 
@@ -282,26 +334,45 @@
 
                     <tbody>
                         {% for row in results %}
-                            <tr>
-                                {% for col in columns %}
-                                    {% if col not in ["LAN Tempera Controller Password", "Windows 10 Maps #"] %}
-                                        <td class="{% if col == 'Phone' %}phone-col{% endif %}">
-                                            {{ row.get(col, "") }}
-                                        </td>
-                                    {% endif %}
-                                {% endfor %}
+                            {% if row.get("_is_group") %}
+                                <tr class="group-row">
+                                    <td class="group-title" colspan="{{ visible_columns.count }}">
+                                        {{ row.get("_group_name", "") }}
+                                    </td>
 
-                                <td class="edit-col">
-                                    {% if row.get("_row_id") %}
-                                        <a class="btn btn-sm btn-outline-primary"
-                                           href="{{ url_for('edit', row_id=row.get('_row_id')) }}">
-                                            Edit
-                                        </a>
-                                    {% else %}
-                                        <span class="text-muted">—</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
+                                    <td class="edit-col">
+                                        {% if row.get("_row_id") %}
+                                            <a class="btn btn-sm btn-outline-primary"
+                                               href="{{ url_for('edit', row_id=row.get('_row_id')) }}">
+                                                Edit
+                                            </a>
+                                        {% else %}
+                                            <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    {% for col in columns %}
+                                        {% if col not in ["LAN Tempera Controller Password", "Windows 10 Maps #"] %}
+                                            <td class="{% if col == 'Phone' %}phone-col{% endif %}">
+                                                {{ row.get(col, "") }}
+                                            </td>
+                                        {% endif %}
+                                    {% endfor %}
+
+                                    <td class="edit-col">
+                                        {% if row.get("_row_id") %}
+                                            <a class="btn btn-sm btn-outline-primary"
+                                               href="{{ url_for('edit', row_id=row.get('_row_id')) }}">
+                                                Edit
+                                            </a>
+                                        {% else %}
+                                            <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endif %}
                         {% endfor %}
                     </tbody>
 
